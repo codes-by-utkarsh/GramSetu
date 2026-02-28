@@ -283,6 +283,7 @@ function AuthScreen({ navigation }) {
     const t = useTranslation();
     const [whatsapp, setWhatsapp] = useState('');
     const [password, setPassword] = useState('');
+    const [loading, setLoading] = useState(false);
 
     const handleContinue = async () => {
         if (!whatsapp || !password) {
@@ -290,18 +291,36 @@ function AuthScreen({ navigation }) {
             return;
         }
 
-        // SMART ROUTING (Mock Backend Check)
-        // In production, we send the WhatsApp number to AWS API Gateway here.
-        // If the database returns "User Not Found", we route them to the Setup page.
-        // Let's pretend any number EXACTLY 10 digits that starts with '9' is an existing user.
-        const isExistingUser = whatsapp.startsWith('9') && whatsapp.length === 10;
+        setLoading(true);
+        try {
+            // SMART ROUTING (Mock Backend Check)
+            // We will assume any number exactly 10-digits long starting with 9 is an existing user
+            const isExistingUser = whatsapp.startsWith('9') && whatsapp.length === 10;
 
-        if (isExistingUser) {
-            // Existing User -> Go straight to OTP Verification
-            navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
-        } else {
-            // New User -> Go to Profile Setup to grab Twilio credentials
-            navigation.navigate('NewUserSetup', { whatsapp, password });
+            // Send the request to our real Python Backend to trigger Twilio WhatsApp OTP
+            const response = await fetch('http://localhost:8000/auth/login', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: whatsapp, password })
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to send WhatsApp OTP. Please ensure the Python backend is running.');
+            }
+
+            setLoading(false);
+
+            if (isExistingUser) {
+                // Existing User -> Go straight to OTP Verification
+                navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
+            } else {
+                // New User -> Go to Profile Setup to grab Twilio credentials
+                navigation.navigate('NewUserSetup', { whatsapp, password });
+            }
+
+        } catch (err) {
+            setLoading(false);
+            Alert.alert('Twilio Backend Error', err.message);
         }
     };
 
@@ -338,6 +357,8 @@ function AuthScreen({ navigation }) {
                             style={styles.submitBtn}
                             buttonColor={gramSetuTheme.colors.primary}
                             labelStyle={{ fontSize: 16 }}
+                            loading={loading}
+                            disabled={loading}
                         >
                             {t.continue}
                         </Button>
@@ -413,6 +434,7 @@ function OtpScreen({ route, navigation }) {
     const t = useTranslation();
     const { whatsapp, password, isNewUser, twilioNumber } = route.params;
     const [otp, setOtp] = useState('');
+    const [loading, setLoading] = useState(false);
 
     const handleVerify = async () => {
         if (!otp) {
@@ -420,15 +442,39 @@ function OtpScreen({ route, navigation }) {
             return;
         }
 
-        // In production, backend validates OTP here using AWS Cognito / DynamoDB
-        const userData = { phone: whatsapp, isLoggedIn: true, isNewUser, twilioNumber };
-        await AsyncStorage.setItem('user', JSON.stringify(userData));
+        setLoading(true);
+        try {
+            // Verify against Real AWS Python Backend
+            const response = await fetch('http://localhost:8000/auth/verify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    phone: whatsapp,
+                    otp,
+                    is_new_user: isNewUser || false,
+                    twilio_number: twilioNumber || ""
+                })
+            });
 
-        // Clear navigation stack and go to Dashboard
-        navigation.reset({
-            index: 0,
-            routes: [{ name: 'Dashboard' }],
-        });
+            if (!response.ok) {
+                throw new Error('Invalid OTP passed');
+            }
+
+            // Authentication & DynamoDB Registration Success
+            const userData = { phone: whatsapp, isLoggedIn: true, isNewUser, twilioNumber };
+            await AsyncStorage.setItem('user', JSON.stringify(userData));
+
+            // Clear navigation stack and go to Dashboard
+            navigation.reset({
+                index: 0,
+                routes: [{ name: 'Dashboard' }],
+            });
+
+        } catch (err) {
+            Alert.alert('Verification Failed', err.message);
+        } finally {
+            setLoading(false);
+        }
     };
 
     return (
@@ -460,6 +506,8 @@ function OtpScreen({ route, navigation }) {
                             style={styles.submitBtn}
                             buttonColor={gramSetuTheme.colors.secondary}
                             labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
+                            loading={loading}
+                            disabled={loading}
                         >
                             {t.verifyOtp}
                         </Button>
