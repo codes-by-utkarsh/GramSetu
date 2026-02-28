@@ -48,6 +48,10 @@ class BhashiniClient:
             Transcribed text
         """
         try:
+            if settings.demo_mode and not self.api_key:
+                logger.info("Mock Bhashini ASR simulating audio transcription...")
+                return "mujhe pm kisan scheme mein naya form bharna hai"
+
             # Encode audio to base64
             audio_base64 = base64.b64encode(audio_bytes).decode()
             
@@ -112,6 +116,10 @@ class BhashiniClient:
             Translated text
         """
         try:
+            if settings.demo_mode and not self.api_key:
+                logger.info(f"Mock Bhashini Translation: {text} -> English")
+                return "I want to apply for a new form in the PM Kisan scheme"
+
             payload = {
                 "pipelineTasks": [
                     {
@@ -163,6 +171,10 @@ class BhashiniClient:
             Audio bytes (WAV)
         """
         try:
+            if settings.demo_mode and not self.api_key:
+                logger.info(f"Mock Bhashini TTS Synthesizing audio: {text}")
+                return b'RIFF$\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00D\xac\x00\x00\x88X\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
+
             payload = {
                 "pipelineTasks": [
                     {

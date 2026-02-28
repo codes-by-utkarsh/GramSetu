@@ -11,7 +11,6 @@ from typing import Optional
 from shared.config import get_settings
 from shared.schemas import VoiceInput, VoiceOutput, IntentType, SchemeType
 from shared.logging_config import setup_logging
-from shared.redis_client import get_redis, RedisClient
 
 from services.voice.bhashini_client import BhashiniClient
 from services.voice.audio_processor import AudioProcessor
@@ -26,6 +25,7 @@ app = FastAPI(title="GramSetu Voice Service", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -58,8 +58,7 @@ async def health_check():
 
 @app.post("/process-audio", response_model=VoiceOutput)
 async def process_audio(
-    voice_input: VoiceInput,
-    redis: RedisClient = Depends(get_redis)
+    voice_input: VoiceInput
 ):
     """
     Process voice input through complete pipeline:
@@ -113,13 +112,8 @@ async def process_audio(
             confidence=intent_result.get("confidence", 0.0)
         )
         
-        # Cache for session continuity
-        if voice_input.session_id:
-            await redis.set_json(
-                f"voice:session:{voice_input.session_id}",
-                output.dict(),
-                expire=3600
-            )
+        # Caching disabled for MVP to stay serverless
+        pass
         
         logger.info(
             "Voice processing complete",

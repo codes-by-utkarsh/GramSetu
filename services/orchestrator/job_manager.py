@@ -8,6 +8,9 @@ from datetime import datetime
 from typing import Optional
 from shared.schemas import JobRequest, JobStatusResponse, JobStatus
 from shared.logging_config import logger
+from shared.config import get_settings
+
+settings = get_settings()
 
 class JobManager:
     """Orchestrates multi-service workflows using AWS Serverless Stack"""
@@ -16,9 +19,9 @@ class JobManager:
         # Initialize DynamoDB resource
         self.dynamodb = boto3.resource(
             'dynamodb',
-            aws_access_key_id=os.getenv('AWS_ACCESS_KEY_ID'),
-            aws_secret_access_key=os.getenv('AWS_SECRET_ACCESS_KEY'),
-            region_name=os.getenv('AWS_REGION', 'ap-south-1')
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            region_name=settings.aws_region
         )
         self.jobs_table = self.dynamodb.Table('GramSetu_Jobs')
         self.users_table = self.dynamodb.Table('GramSetu_Users')
@@ -27,12 +30,13 @@ class JobManager:
         """Initialize connections"""
         logger.info("DynamoDB Job manager initialized")
     
-    async def create_user(self, phone: str, twilio_number: str):
+    async def create_user(self, phone: str, twilio_number: str, full_name: str = ""):
         """Creates a new VLE profile in DynamoDB"""
         try:
             self.users_table.put_item(
                 Item={
                     'phone': phone,
+                    'full_name': full_name,
                     'twilio_number': twilio_number,
                     'created_at': datetime.utcnow().isoformat()
                 }

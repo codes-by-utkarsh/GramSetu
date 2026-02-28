@@ -4,8 +4,8 @@ Handles noise suppression, VAD, and format conversion
 """
 import io
 import numpy as np
-from pydub import AudioSegment
 import noisereduce as nr
+import soundfile as sf
 import soundfile as sf
 from typing import Optional
 from shared.config import get_settings
@@ -37,22 +37,21 @@ class AudioProcessor:
             Processed WAV bytes
         """
         try:
-            # Load audio using pydub
-            audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+            # Load audio using soundfile (skipping pydub since it breaks in Python 3.13)
+            samples, original_sr = sf.read(io.BytesIO(audio_bytes))
             
-            # Convert to mono
-            if audio.channels > 1:
-                audio = audio.set_channels(1)
+            # Convert to mono if it's stereo
+            if len(samples.shape) > 1 and samples.shape[1] > 1:
+                samples = samples.mean(axis=1)
                 logger.debug("Converted to mono")
             
-            # Resample to target rate
-            if audio.frame_rate != self.sample_rate:
-                audio = audio.set_frame_rate(self.sample_rate)
-                logger.debug(f"Resampled to {self.sample_rate}Hz")
+            # Note: real resampling requires librosa/scipy. For MVP, we pass it through
+            if original_sr != self.sample_rate:
+                logger.debug(f"Audio is {original_sr}Hz. Expected {self.sample_rate}Hz.")
+                self.sample_rate = original_sr  # Keep original rate for soundfile write
             
-            # Convert to numpy array for processing
-            samples = np.array(audio.get_array_of_samples()).astype(np.float32)
-            samples = samples / (2**15)  # Normalize to [-1, 1]
+            # Ensure float32 format
+            samples = samples.astype(np.float32)
             
             # Apply noise suppression if enabled
             if settings.enable_noise_suppression:

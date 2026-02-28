@@ -41,6 +41,7 @@ app = FastAPI(title="GramSetu Orchestrator", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -161,6 +162,46 @@ async def auth_verify(req: VerifyRequest):
         
     except Exception as e:
         logger.error(f"Verification failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+class ProfileUpdateRequest(BaseModel):
+    phone: str
+    fullName: str
+    twilioNumber: str
+
+@app.get("/user/{phone}")
+async def get_user_profile(phone: str):
+    try:
+        user_data = await job_manager.get_user(phone)
+        if not user_data:
+            raise HTTPException(status_code=404, detail="User not found")
+        return {"status": "success", "data": user_data}
+    except Exception as e:
+        logger.error(f"Failed to fetch user profile: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/user/update")
+async def update_user_profile(req: ProfileUpdateRequest):
+    try:
+        user_data = await job_manager.get_user(req.phone)
+        if not user_data:
+            # We must recreate the user
+            await job_manager.create_user(req.phone, req.twilioNumber, req.fullName)
+        else:
+            # Note: A real implementation would implement an update_user in job_manager
+            # but for MVP we can use put_item to overwrite.
+            job_manager.users_table.put_item(
+                Item={
+                    'phone': req.phone,
+                    'full_name': req.fullName,
+                    'twilio_number': req.twilioNumber,
+                    'created_at': user_data.get('created_at', datetime.utcnow().isoformat()),
+                    'updated_at': datetime.utcnow().isoformat()
+                }
+            )
+        return {"status": "success", "message": "Profile updated successfully"}
+    except Exception as e:
+        logger.error(f"Failed to update user profile: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
