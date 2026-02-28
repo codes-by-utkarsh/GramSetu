@@ -284,13 +284,25 @@ function AuthScreen({ navigation }) {
     const [whatsapp, setWhatsapp] = useState('');
     const [password, setPassword] = useState('');
 
-    const handleContinue = () => {
+    const handleContinue = async () => {
         if (!whatsapp || !password) {
             Alert.alert('Error', t.errorRequired);
             return;
         }
-        // Navigate strictly to OTP Screen with user's phone
-        navigation.navigate('OTP', { whatsapp, password });
+
+        // SMART ROUTING (Mock Backend Check)
+        // In production, we send the WhatsApp number to AWS API Gateway here.
+        // If the database returns "User Not Found", we route them to the Setup page.
+        // Let's pretend any number EXACTLY 10 digits that starts with '9' is an existing user.
+        const isExistingUser = whatsapp.startsWith('9') && whatsapp.length === 10;
+
+        if (isExistingUser) {
+            // Existing User -> Go straight to OTP Verification
+            navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
+        } else {
+            // New User -> Go to Profile Setup to grab Twilio credentials
+            navigation.navigate('NewUserSetup', { whatsapp, password });
+        }
     };
 
     return (
@@ -337,11 +349,69 @@ function AuthScreen({ navigation }) {
 }
 
 // ==========================================
+// 4b. New User Setup Screen
+// ==========================================
+function NewUserSetupScreen({ route, navigation }) {
+    const t = useTranslation();
+    const { whatsapp, password } = route.params;
+    const [twilioNumber, setTwilioNumber] = useState('');
+
+    const handleCompleteSetup = () => {
+        if (!twilioNumber) {
+            Alert.alert('Error', 'Please configure your CSC Twilio WhatsApp number.');
+            return;
+        }
+        // Now trigger OTP for the new user
+        navigation.navigate('OTP', { whatsapp, password, twilioNumber, isNewUser: true });
+    };
+
+    return (
+        <GradientBackground>
+            <View style={[styles.centerAll, { flex: 1 }]}>
+                <Icon name="cog-outline" size={70} color={gramSetuTheme.colors.primary} style={{ marginBottom: 15 }} />
+
+                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
+                    <Card.Content>
+                        <Title style={styles.authTitle}>CSC Setup</Title>
+                        <Paragraph style={[styles.authSubtitle, { marginBottom: 15 }]}>
+                            Looks like you are a new VLE. We just need your Twilio API Sender Number to connect your agent.
+                        </Paragraph>
+
+                        <TextInput
+                            style={styles.input}
+                            placeholder="+1 (WhatsApp Sender Number)"
+                            placeholderTextColor="#888"
+                            keyboardType="phone-pad"
+                            value={twilioNumber}
+                            onChangeText={setTwilioNumber}
+                        />
+
+                        <Button
+                            mode="contained"
+                            onPress={handleCompleteSetup}
+                            style={styles.submitBtn}
+                            buttonColor={gramSetuTheme.colors.secondary}
+                            labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
+                        >
+                            Register & Request OTP
+                        </Button>
+
+                        <Button mode="text" onPress={() => navigation.goBack()} textColor="#666">
+                            Cancel
+                        </Button>
+                    </Card.Content>
+                </Card>
+            </View>
+        </GradientBackground>
+    );
+}
+
+// ==========================================
 // 5. OTP Screen
 // ==========================================
 function OtpScreen({ route, navigation }) {
     const t = useTranslation();
-    const { whatsapp, password } = route.params;
+    const { whatsapp, password, isNewUser, twilioNumber } = route.params;
     const [otp, setOtp] = useState('');
 
     const handleVerify = async () => {
@@ -351,7 +421,7 @@ function OtpScreen({ route, navigation }) {
         }
 
         // In production, backend validates OTP here using AWS Cognito / DynamoDB
-        const userData = { phone: whatsapp, isLoggedIn: true };
+        const userData = { phone: whatsapp, isLoggedIn: true, isNewUser, twilioNumber };
         await AsyncStorage.setItem('user', JSON.stringify(userData));
 
         // Clear navigation stack and go to Dashboard
@@ -558,6 +628,7 @@ export default function App() {
                         <Stack.Screen name="Splash" component={SplashScreen} />
                         <Stack.Screen name="LanguageSelection" component={LanguageSelectionScreen} />
                         <Stack.Screen name="Auth" component={AuthScreen} />
+                        <Stack.Screen name="NewUserSetup" component={NewUserSetupScreen} />
                         <Stack.Screen name="OTP" component={OtpScreen} />
                         <Stack.Screen name="Dashboard" component={DashboardScreen} />
                     </Stack.Navigator>
