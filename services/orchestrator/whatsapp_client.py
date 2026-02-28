@@ -62,3 +62,29 @@ class WhatsAppClient:
         except Exception as e:
             logger.error(f"WhatsApp notification failed: {str(e)}")
             # Don't raise - notification failure shouldn't break the job
+
+    async def send_otp(self, to_phone: str, otp: str):
+        """Send a 6-digit OTP code to the VLE for login via WhatsApp"""
+        if not self.client:
+            logger.warning("Twilio client not initialized, skipping OTP")
+            return
+        
+        try:
+            # Twilio Sandbox requires the format whatsapp:+91..........
+            to_number = f"whatsapp:+91{to_phone}" if not to_phone.startswith("+") else f"whatsapp:{to_phone}"
+            from_number = settings.twilio_whatsapp_number
+            
+            message_text = f"Your GramSetu VLE verification code is: *{otp}*. Do not share this with anyone."
+            
+            message = self.client.messages.create(
+                body=message_text,
+                from_=from_number,
+                to=to_number
+            )
+            
+            logger.info(f"OTP successfully sent to {to_phone}. Message SID: {message.sid}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to send OTP via Twilio: {str(e)}")
+            return False
