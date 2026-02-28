@@ -1,180 +1,255 @@
-import React, { useState } from 'react';
-import { View, StyleSheet, Text, TouchableOpacity, Alert } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, StyleSheet, Text, TouchableOpacity, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { Audio } from 'expo-av';
 import { Camera } from 'expo-camera';
-import { Button, Card, Title, Paragraph } from 'react-native-paper';
+import { Appbar, Card, Title, Paragraph, Button, useTheme, MD3LightTheme, Provider as PaperProvider, Avatar } from 'react-native-paper';
+import * as FileSystem from 'expo-file-system';
 import axios from 'axios';
+import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 
-const API_BASE_URL = 'http://localhost:8000';
+// --- Configuration ---
+const API_BASE_URL = 'http://localhost:8000'; // Will be replaced by AWS API Gateway/EC2 IP
 
-export default function App() {
-    const [recording, setRecording] = useState(null);
-    const [jobId, setJobId] = useState(null);
-    const [status, setStatus] = useState('Ready');
+// --- Theming: Government Blue & Indian Saffron ---
+const gramSetuTheme = {
+  ...MD3LightTheme,
+  colors: {
+    ...MD3LightTheme.colors,
+    primary: '#003366', // Trustworthy Government Blue
+    secondary: '#FF9933', // Vibrant Indian Saffron
+    background: '#F5F7FA', // Clean light background
+    surface: '#ffffff',
+    error: '#B00020',
+    text: '#333333',
+    onPrimary: '#ffffff',
+    onSecondary: '#ffffff',
+  },
+};
 
-    // Request permissions
-    const requestPermissions = async () => {
-        const audioPermission = await Audio.requestPermissionsAsync();
-        const cameraPermission = await Camera.requestCameraPermissionsAsync();
+export default function MainApp() {
+  const [recording, setRecording] = useState(null);
+  const [hasPermissions, setHasPermissions] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
 
-        if (!audioPermission.granted || !cameraPermission.granted) {
-            Alert.alert('Permissions Required', 'Please grant audio and camera permissions');
-        }
-    };
+  // State for jobs/queue
+  const [queuedJobs, setQueuedJobs] = useState([
+    // Mock initial state to show the list concept
+    { id: '1', title: 'PM-Kisan Status', citizen: 'Ramesh Kumar', status: 'completed', time: '10:30 AM' },
+    { id: '2', title: 'Awaas Yojana Apply', citizen: 'Lakshmi Devi', status: 'syncing', time: '11:15 AM' },
+  ]);
 
-    React.useEffect(() => {
-        requestPermissions();
-    }, []);
+  useEffect(() => {
+    (async () => {
+      const audioPermission = await Audio.requestPermissionsAsync();
+      const cameraPermission = await Camera.requestCameraPermissionsAsync();
+      setHasPermissions(audioPermission.status === 'granted' && cameraPermission.status === 'granted');
+    })();
+  }, []);
 
-    // Start voice recording
-    const startRecording = async () => {
-        try {
-            await Audio.setAudioModeAsync({
-                allowsRecordingIOS: true,
-                playsInSilentModeIOS: true,
-            });
+  // --- Voice Commands ---
+  const startRecording = async () => {
+    if (!hasPermissions) {
+      Alert.alert('Permissions Required', 'Please grant audio and camera permissions in your settings.');
+      return;
+    }
+    try {
+      await Audio.setAudioModeAsync({ allowsRecordingIOS: true, playsInSilentModeIOS: true });
+      const { recording } = await Audio.Recording.createAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+      setRecording(recording);
+    } catch (err) {
+      console.error('Failed to start recording', err);
+      Alert.alert('Error', 'Could not start recording hook.');
+    }
+  };
 
-            const { recording } = await Audio.Recording.createAsync(
-                Audio.RecordingOptionsPresets.HIGH_QUALITY
-            );
-            setRecording(recording);
-            setStatus('Recording...');
-        } catch (err) {
-            console.error('Failed to start recording', err);
-        }
-    };
+  const stopRecording = async () => {
+    setRecording(undefined);
+    setIsProcessing(true);
+    await recording.stopAndUnloadAsync();
+    const uri = recording.getURI();
 
-    // Stop and process recording
-    const stopRecording = async () => {
-        setStatus('Processing voice...');
-        setRecording(undefined);
-        await recording.stopAndUnloadAsync();
+    try {
+      // Create a mock new job for UI purposes immediately
+      const newJobId = Math.floor(Math.random() * 1000).toString();
+      const newJob = { id: newJobId, title: 'Voice Request...', citizen: 'Unknown', status: 'processing', time: 'Just now' };
+      setQueuedJobs([newJob, ...queuedJobs]);
 
-        const uri = recording.getURI();
+      // In production: Send to AWS backend
+      // const base64Audio = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+      // const res = await axios.post(`${API_BASE_URL}/jobs/voice`, { audio: base64Audio });
+      
+      // Simulate backend delay
+      setTimeout(() => {
+        setIsProcessing(false);
+        setQueuedJobs(currentJobs => currentJobs.map(job => 
+          job.id === newJobId ? { ...job, title: 'e-Shram Registration', citizen: 'Verify Name', status: 'pending_scan' } : job
+        ));
+      }, 2000);
 
-        // Convert to base64
-        const base64Audio = await FileSystem.readAsStringAsync(uri, {
-            encoding: FileSystem.EncodingType.Base64,
-        });
+    } catch (error) {
+      setIsProcessing(false);
+      Alert.alert('Processing Failed', error.message);
+    }
+  };
 
-        // Send to voice service
-        try {
-            const response = await axios.post(`${API_BASE_URL}/jobs`, {
-                vle_id: 'VLE001',
-                citizen_name: 'Unknown', // Will be extracted from voice
-                citizen_phone: '+919876543210',
-                consent_recorded: true,
-                voice_input: {
-                    audio_base64: base64Audio,
-                    vle_id: 'VLE001',
-                    language_hint: 'hi'
-                }
-            });
+  const renderJobStatusIcon = (status) => {
+    switch(status) {
+      case 'completed': return <Avatar.Icon size={32} icon="check" style={{backgroundColor: '#4CAF50'}} />;
+      case 'processing': return <ActivityIndicator color={gramSetuTheme.colors.primary} />;
+      case 'syncing': return <Avatar.Icon size={32} icon="cloud-sync" style={{backgroundColor: '#FF9933'}} />;
+      case 'pending_scan': return <Avatar.Icon size={32} icon="camera-account" style={{backgroundColor: '#E91E63'}} />;
+      default: return <Avatar.Icon size={32} icon="clock-outline" style={{backgroundColor: '#9E9E9E'}} />;
+    }
+  };
 
-            setJobId(response.data.job_id);
-            setStatus(`Job created: ${response.data.job_id}`);
+  return (
+    <PaperProvider theme={gramSetuTheme}>
+      <Appbar.Header style={{ backgroundColor: gramSetuTheme.colors.primary }}>
+        <Appbar.Content title="GramSetu" subtitle="VLE Dashboard" color="#ffffff" />
+        <Appbar.Action icon="bell" color="#ffffff" onPress={() => {}} />
+        {/* Offline Sync Indicator */}
+        <Appbar.Action icon="cloud-check" color="#4CAF50" onPress={() => {}} />
+      </Appbar.Header>
 
-            // Start polling for status
-            pollJobStatus(response.data.job_id);
-        } catch (error) {
-            setStatus('Error: ' + error.message);
-        }
-    };
+      <ScrollView style={styles.container}>
+        {/* Hero Section */}
+        <Card style={styles.heroCard}>
+          <Card.Content style={styles.heroContent}>
+            <Title style={styles.heroTitle}>Autopilot for CSC</Title>
+            <Paragraph style={styles.heroSubtitle}>Hold to speak your command in Hindi, Tamil, or Telugu.</Paragraph>
+            
+            <TouchableOpacity 
+              style={[styles.micButton, recording && styles.micButtonRecording]} 
+              onPressIn={startRecording}
+              onPressOut={stopRecording}
+              activeOpacity={0.8}
+            >
+              <Icon name={recording ? "microphone-outline" : "microphone"} size={60} color="#ffffff" />
+            </TouchableOpacity>
+            <Text style={styles.micHelperText}>
+              {recording ? "Listening... Release to process" : "Hold to speak (e.g., 'PM-Kisan status for Ramesh')"}
+            </Text>
+          </Card.Content>
+        </Card>
 
-    // Poll job status
-    const pollJobStatus = async (jobId) => {
-        const interval = setInterval(async () => {
-            try {
-                const response = await axios.get(`${API_BASE_URL}/jobs/${jobId}`);
-                setStatus(`Status: ${response.data.status}`);
-
-                if (response.data.status === 'completed' || response.data.status === 'failed') {
-                    clearInterval(interval);
-                    if (response.data.status === 'completed') {
-                        Alert.alert('Success', 'Application processed successfully!');
-                    }
-                }
-            } catch (error) {
-                clearInterval(interval);
-                setStatus('Error polling status');
-            }
-        }, 2000);
-    };
-
-    return (
-        <View style={styles.container}>
-            <Card style={styles.card}>
-                <Card.Content>
-                    <Title>GramSetu VLE App</Title>
-                    <Paragraph>Voice-first government service assistant</Paragraph>
-                </Card.Content>
-            </Card>
-
-            <View style={styles.statusContainer}>
-                <Text style={styles.statusText}>{status}</Text>
-            </View>
-
-            <View style={styles.buttonContainer}>
-                <Button
-                    mode="contained"
-                    onPress={recording ? stopRecording : startRecording}
-                    style={styles.button}
-                    icon={recording ? 'stop' : 'microphone'}
-                >
-                    {recording ? 'Stop Recording' : 'Start Recording'}
-                </Button>
-
-                <Button
-                    mode="outlined"
-                    onPress={() => {/* TODO: Open camera for document scan */ }}
-                    style={styles.button}
-                    icon="camera"
-                >
-                    Scan Document
-                </Button>
-            </View>
-
-            {jobId && (
-                <Card style={styles.jobCard}>
-                    <Card.Content>
-                        <Title>Job ID</Title>
-                        <Paragraph>{jobId}</Paragraph>
-                    </Card.Content>
-                </Card>
-            )}
+        {/* Quick Actions */}
+        <View style={styles.quickActionsContainer}>
+          <Button 
+            mode="contained" 
+            icon="card-bulleted-outline" 
+            buttonColor={gramSetuTheme.colors.secondary}
+            style={styles.actionButton}
+            onPress={() => Alert.alert('Camera', 'Opening Edge-Masking Camera...')}
+          >
+            Scan Aadhaar
+          </Button>
+          <Button 
+            mode="outlined" 
+            icon="text-box-search-outline" 
+            textColor={gramSetuTheme.colors.primary}
+            style={styles.actionButton}
+          >
+            Manual Entry
+          </Button>
         </View>
-    );
+
+        {/* Queued Jobs List */}
+        <Title style={styles.sectionTitle}>Today's Queue</Title>
+        {queuedJobs.map((job) => (
+          <Card key={job.id} style={styles.jobCard} mode="elevated">
+            <Card.Title
+              title={job.title}
+              subtitle={`${job.citizen} • ${job.time}`}
+              left={(props) => renderJobStatusIcon(job.status)}
+              right={(props) => (
+                <View style={styles.jobActionRight}>
+                  {job.status === 'pending_scan' && (
+                    <Button mode="text" textColor={gramSetuTheme.colors.secondary} compact>Scan Docs</Button>
+                  )}
+                  <Icon name="chevron-right" size={24} color="#757575" style={{marginRight: 10}}/>
+                </View>
+              )}
+            />
+          </Card>
+        ))}
+        <View style={{height: 40}} />
+      </ScrollView>
+    </PaperProvider>
+  );
 }
 
 const styles = StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: '#f5f5f5',
-        padding: 20,
-        justifyContent: 'center',
-    },
-    card: {
-        marginBottom: 20,
-    },
-    statusContainer: {
-        backgroundColor: '#e3f2fd',
-        padding: 15,
-        borderRadius: 8,
-        marginBottom: 20,
-    },
-    statusText: {
-        fontSize: 16,
-        color: '#1976d2',
-        textAlign: 'center',
-    },
-    buttonContainer: {
-        gap: 10,
-    },
-    button: {
-        marginVertical: 5,
-    },
-    jobCard: {
-        marginTop: 20,
-        backgroundColor: '#e8f5e9',
-    },
+  container: {
+    flex: 1,
+    backgroundColor: gramSetuTheme.colors.background,
+    padding: 16,
+  },
+  heroCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    marginBottom: 20,
+    elevation: 4,
+  },
+  heroContent: {
+    alignItems: 'center',
+    paddingVertical: 30,
+  },
+  heroTitle: {
+    color: gramSetuTheme.colors.primary,
+    fontSize: 24,
+    fontWeight: 'bold',
+  },
+  heroSubtitle: {
+    color: '#666666',
+    textAlign: 'center',
+    marginBottom: 30,
+  },
+  micButton: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: gramSetuTheme.colors.primary,
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 8,
+    shadowColor: gramSetuTheme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  micButtonRecording: {
+    backgroundColor: gramSetuTheme.colors.error,
+    transform: [{ scale: 1.1 }],
+  },
+  micHelperText: {
+    marginTop: 15,
+    color: gramSetuTheme.colors.primary,
+    fontWeight: '500',
+  },
+  quickActionsContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 20,
+    gap: 10,
+  },
+  actionButton: {
+    flex: 1,
+    paddingVertical: 5,
+    borderRadius: 10,
+  },
+  sectionTitle: {
+    color: gramSetuTheme.colors.primary,
+    fontWeight: 'bold',
+    marginBottom: 10,
+    fontSize: 20,
+  },
+  jobCard: {
+    marginBottom: 10,
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+  },
+  jobActionRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  }
 });
