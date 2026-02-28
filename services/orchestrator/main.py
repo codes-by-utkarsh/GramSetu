@@ -13,7 +13,21 @@ from shared.schemas import (
     JobStatus, WhatsAppNotification
 )
 from shared.logging_config import setup_logging
-from shared.redis_client import get_redis, RedisClient
+from pydantic import BaseModel
+import random
+
+# In-memory OTP store for MVP (Phone Number -> OTP Code)
+OTP_STORE = {}
+
+class LoginRequest(BaseModel):
+    phone: str
+    password: str
+
+class VerifyRequest(BaseModel):
+    phone: str
+    otp: str
+    is_new_user: bool = False
+    twilio_number: str = ""
 
 from services.orchestrator.job_manager import JobManager
 from services.orchestrator.whatsapp_client import WhatsAppClient
@@ -52,10 +66,7 @@ async def health_check():
 
 
 @app.post("/jobs", response_model=JobResponse)
-async def create_job(
-    job_request: JobRequest,
-    redis: RedisClient = Depends(get_redis)
-):
+async def create_job(job_request: JobRequest):
     """
     Create new job from VLE
     
@@ -109,6 +120,47 @@ async def get_job_status(job_id: str):
         return status
     except Exception as e:
         logger.error(f"Status retrieval failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/auth/login")
+async def auth_login(req: LoginRequest):
+    """Generates an OTP and sends it via Twilio WhatsApp"""
+    try:
+        # Generate a 6-digit OTP
+        otp = str(random.randint(100000, 999999))
+        OTP_STORE[req.phone] = otp
+        
+        # In a real app, verify password hash from DB here
+        success = await whatsapp_client.send_otp(req.phone, otp)
+        
+        if success:
+            return {"status": "success", "message": "OTP sent to WhatsApp"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send OTP via Twilio")
+            
+    except Exception as e:
+        logger.error(f"Login failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/auth/verify")
+async def auth_verify(req: VerifyRequest):
+    """Verifies the OTP and registers user in DB if new"""
+    stored_otp = OTP_STORE.get(req.phone)
+    
+    if not stored_otp or stored_otp != req.otp:
+        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
+        
+    try:
+        if req.is_new_user:
+            # Save user configuration securely to DynamoDB
+            await job_manager.create_user(req.phone, req.twilio_number)
+            
+        del OTP_STORE[req.phone]
+        return {"status": "success", "message": "Authenticated"}
+        
+    except Exception as e:
+        logger.error(f"Verification failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
