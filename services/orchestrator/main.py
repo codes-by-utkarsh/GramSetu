@@ -23,11 +23,19 @@ class LoginRequest(BaseModel):
     phone: str
     password: str
 
+class SignupRequest(BaseModel):
+    phone: str
+    password: str
+    fullName: str = ""
+    cscId: str = ""
+    twilioNumber: str = ""
+
 class VerifyRequest(BaseModel):
     phone: str
     otp: str
     is_new_user: bool = False
     twilio_number: str = ""
+    fullName: str = ""
 
 from services.orchestrator.job_manager import JobManager
 from services.orchestrator.whatsapp_client import WhatsAppClient
@@ -166,11 +174,36 @@ async def update_job_status(req: JobUpdateWebhook):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/auth/signup")
+async def auth_signup(req: SignupRequest):
+    """Registers a new user and sends OTP"""
+    try:
+        user = await job_manager.get_user(req.phone)
+        if user:
+            raise HTTPException(status_code=400, detail="User already exists")
+        
+        otp = str(random.randint(100000, 999999))
+        OTP_STORE[req.phone] = otp
+        
+        success = await whatsapp_client.send_otp(req.phone, otp)
+        if success:
+            return {"status": "success", "message": "OTP sent to WhatsApp for registration"}
+        else:
+            raise HTTPException(status_code=500, detail="Failed to send OTP via Twilio")
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Signup failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest):
     """Generates an OTP and sends it via Twilio WhatsApp"""
     try:
-        # Generate a 6-digit OTP
+        user = await job_manager.get_user(req.phone)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found. Please sign up.")
+            
         otp = str(random.randint(100000, 999999))
         OTP_STORE[req.phone] = otp
         
@@ -182,6 +215,8 @@ async def auth_login(req: LoginRequest):
         else:
             raise HTTPException(status_code=500, detail="Failed to send OTP via Twilio")
             
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Login failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -197,7 +232,7 @@ async def auth_verify(req: VerifyRequest):
     try:
         if req.is_new_user:
             # Save user configuration securely to DynamoDB
-            await job_manager.create_user(req.phone, req.twilio_number)
+            await job_manager.create_user(req.phone, req.twilio_number, req.fullName)
             
         del OTP_STORE[req.phone]
         return {"status": "success", "message": "Authenticated"}
