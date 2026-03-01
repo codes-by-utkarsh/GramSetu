@@ -67,7 +67,7 @@ class WhatsAppClient:
         """Send a 6-digit OTP code to the VLE for login via WhatsApp"""
         if not self.client:
             logger.warning("Twilio client not initialized, skipping OTP")
-            return
+            return False
         
         try:
             # Twilio Sandbox requires the format whatsapp:+91..........

@@ -1,6 +1,7 @@
 """
 Visual web navigator using multimodal LLM
 Navigates websites by "seeing" the screen, not parsing DOM
+Uses AWS Bedrock (Claude) for vision - no separate Anthropic API key needed
 """
 from playwright.async_api import async_playwright, Page, Browser
 from typing import Optional, Dict, Any, List
@@ -8,17 +9,13 @@ import base64
 import io
 from PIL import Image
 import json
+import os
+import asyncio
+from pathlib import Path
 
 from shared.config import get_settings
 from shared.schemas import AgentTask, AgentResult, JobStatus
 from shared.logging_config import logger
-
-# Import Anthropic for Claude vision
-try:
-    from anthropic import AsyncAnthropic
-    USE_ANTHROPIC = True
-except ImportError:
-    USE_ANTHROPIC = False
 
 settings = get_settings()
 
@@ -58,32 +55,53 @@ If you see an error or session timeout, indicate that."""
     def __init__(self):
         self.browser: Optional[Browser] = None
         self.playwright = None
+        self._use_bedrock = False
+        self._bedrock = None
+        self._bedrock_model = settings.bedrock_model_id
         
-        if USE_ANTHROPIC:
-            self.anthropic = AsyncAnthropic(api_key=settings.aws_access_key_id)
-            logger.info("Using Anthropic Claude for visual navigation")
-        else:
-            logger.warning("Anthropic not available, visual navigation limited")
+        # Initialize AWS Bedrock client for Claude vision
+        try:
+            import boto3
+            self._bedrock = boto3.client(
+                'bedrock-runtime',
+                region_name=settings.aws_region,
+                aws_access_key_id=settings.aws_access_key_id,
+                aws_secret_access_key=settings.aws_secret_access_key,
+            )
+            self._use_bedrock = True
+            logger.info(f"Using AWS Bedrock ({self._bedrock_model}) for visual navigation")
+        except Exception as e:
+            self._use_bedrock = False
+            logger.warning(f"AWS Bedrock not available for visual nav: {e}")
     
     async def initialize(self):
         """Start Playwright browser"""
-        self.playwright = await async_playwright().start()
-        self.browser = await self.playwright.chromium.launch(
-            headless=settings.headless_browser,
-            args=[
-                '--disable-blink-features=AutomationControlled',
-                '--no-sandbox'
-            ]
-        )
-        logger.info("Browser initialized")
+        try:
+            self.playwright = await async_playwright().start()
+            self.browser = await self.playwright.chromium.launch(
+                headless=settings.headless_browser,
+                args=[
+                    '--disable-blink-features=AutomationControlled',
+                    '--no-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                ]
+            )
+            logger.info("Playwright browser initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize browser: {e}")
+            raise
     
     async def cleanup(self):
         """Close browser"""
-        if self.browser:
-            await self.browser.close()
-        if self.playwright:
-            await self.playwright.stop()
-        logger.info("Browser cleaned up")
+        try:
+            if self.browser:
+                await self.browser.close()
+            if self.playwright:
+                await self.playwright.stop()
+            logger.info("Browser cleaned up")
+        except Exception as e:
+            logger.warning(f"Browser cleanup warning: {e}")
     
     async def execute(
         self,
@@ -104,12 +122,13 @@ If you see an error or session timeout, indicate that."""
         """
         page = None
         steps_completed = []
+        latest_screenshot = None
         
         try:
             # Create new page
             context = await self.browser.new_context(
                 viewport={'width': 1280, 'height': 720},
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             )
             page = await context.new_page()
             
@@ -120,14 +139,27 @@ If you see an error or session timeout, indicate that."""
             
             # Navigate to portal
             portal_url = driver.get_url()
-            await page.goto(portal_url, wait_until='networkidle')
+            logger.info(f"Navigating to: {portal_url}")
+            
+            try:
+                await page.goto(portal_url, wait_until='domcontentloaded', timeout=20000)
+            except Exception as nav_err:
+                logger.warning(f"Page load warning: {nav_err}")
+            
             steps_completed.append(f"Navigated to {portal_url}")
             
             # Main execution loop
             max_steps = 20
             for step_num in range(max_steps):
                 # Take screenshot
-                screenshot_bytes = await page.screenshot(quality=settings.screenshot_quality)
+                screenshot_bytes = await page.screenshot(type="jpeg", quality=settings.screenshot_quality)
+                
+                # Save screenshot to disk for visualization
+                screenshot_dir = Path("screenshots") / task.task_id
+                screenshot_dir.mkdir(parents=True, exist_ok=True)
+                screenshot_path = screenshot_dir / f"step_{step_num}.jpg"
+                with open(screenshot_path, "wb") as f:
+                    f.write(screenshot_bytes)
                 
                 # Get next action from vision model
                 action = await self._get_next_action(
@@ -137,7 +169,8 @@ If you see an error or session timeout, indicate that."""
                     step_num=step_num
                 )
                 
-                logger.info(f"Step {step_num}: {action['action']} - {action.get('reasoning')}")
+                latest_screenshot = str(screenshot_path.absolute())
+                logger.info(f"Step {step_num}: {action.get('action')} - {action.get('reasoning', '')} | Saved: {latest_screenshot}")
                 
                 # Execute action
                 if action['action'] == 'complete':
@@ -147,19 +180,22 @@ If you see an error or session timeout, indicate that."""
                         status=JobStatus.COMPLETED,
                         result_data=action.get('extracted_data', {}),
                         acknowledgement_number=action.get('extracted_data', {}).get('reference_number'),
-                        steps_completed=steps_completed
+                        steps_completed=steps_completed,
+                        screenshot_url=latest_screenshot
                     )
                 
                 elif action['action'] == 'click':
-                    coords = action['coordinates']
-                    await page.mouse.click(coords['x'], coords['y'])
+                    coords = action.get('coordinates', {})
+                    x, y = coords.get('x', 640), coords.get('y', 360)
+                    await page.mouse.click(x, y)
                     await page.wait_for_timeout(1000)
-                    steps_completed.append(f"Clicked at ({coords['x']}, {coords['y']})")
+                    steps_completed.append(f"Clicked at ({x}, {y})")
                 
                 elif action['action'] == 'type':
-                    coords = action['coordinates']
-                    text = action['text']
-                    await page.mouse.click(coords['x'], coords['y'])
+                    coords = action.get('coordinates', {})
+                    x, y = coords.get('x', 640), coords.get('y', 360)
+                    text = action.get('text', '')
+                    await page.mouse.click(x, y)
                     await page.keyboard.type(text, delay=50)  # Human-like typing
                     steps_completed.append(f"Typed: {text[:20]}...")
                 
@@ -177,36 +213,80 @@ If you see an error or session timeout, indicate that."""
                     captcha_text = await self._solve_captcha(screenshot_bytes, action.get('captcha_region'))
                     if captcha_text:
                         # Type CAPTCHA
-                        coords = action['coordinates']
-                        await page.mouse.click(coords['x'], coords['y'])
+                        coords = action.get('coordinates', {})
+                        x, y = coords.get('x', 640), coords.get('y', 360)
+                        await page.mouse.click(x, y)
                         await page.keyboard.type(captcha_text)
                         steps_completed.append(f"Solved CAPTCHA: {captcha_text}")
                     else:
                         logger.warning("CAPTCHA solving failed")
                 
-                # Check for errors
-                if await self._detect_error(screenshot_bytes):
-                    raise Exception("Error detected on page")
+                # Small delay between steps
+                await asyncio.sleep(0.5)
             
             # Max steps reached
             return AgentResult(
                 task_id=task.task_id,
                 status=JobStatus.FAILED,
                 error_message="Max steps reached without completion",
-                steps_completed=steps_completed
+                steps_completed=steps_completed,
+                screenshot_url=latest_screenshot
             )
             
         except Exception as e:
-            logger.error(f"Visual navigation failed: {str(e)}")
+            logger.error(f"Visual navigation failed: {str(e)}", exc_info=True)
             return AgentResult(
                 task_id=task.task_id,
                 status=JobStatus.FAILED,
                 error_message=str(e),
-                steps_completed=steps_completed
+                steps_completed=steps_completed,
+                screenshot_url=latest_screenshot
             )
         finally:
             if page:
-                await page.close()
+                try:
+                    await page.close()
+                except Exception:
+                    pass
+    
+    async def _call_vision_bedrock(self, image_base64: str, prompt: str, max_tokens: int = 500) -> str:
+        """Call AWS Bedrock Claude with image"""
+        payload = {
+            "anthropic_version": "bedrock-2023-05-31",
+            "max_tokens": max_tokens,
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": image_base64
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+        }
+        
+        # Use asyncio executor for boto3 sync call
+        loop = asyncio.get_event_loop()
+        response = await loop.run_in_executor(
+            None,
+            lambda: self._bedrock.invoke_model(
+                modelId=self._bedrock_model,
+                body=json.dumps(payload)
+            )
+        )
+        
+        result = json.loads(response['body'].read())
+        return result['content'][0]['text']
     
     async def _get_next_action(
         self,
@@ -218,9 +298,9 @@ If you see an error or session timeout, indicate that."""
         """
         Use multimodal LLM to determine next action
         """
-        if not USE_ANTHROPIC:
+        if not self._use_bedrock:
             # Fallback: simple rule-based navigation
-            return {"action": "wait", "reasoning": "No vision model available"}
+            return {"action": "wait", "reasoning": "No vision model available, waiting..."}
         
         try:
             # Encode screenshot
@@ -231,36 +311,20 @@ If you see an error or session timeout, indicate that."""
             prompt += f"\n\nForm data to fill: {json.dumps(form_data)}"
             prompt += f"\n\nCurrent step: {step_num}"
             
-            # Call Claude with vision
-            response = await self.anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=500,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
+            content = await self._call_vision_bedrock(image_base64, prompt, max_tokens=500)
             
-            # Parse JSON response
-            content = response.content[0].text
+            # Extract JSON from response (handle markdown code blocks)
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+            
             action = json.loads(content)
             return action
             
+        except json.JSONDecodeError as e:
+            logger.warning(f"Vision model returned non-JSON: {e}")
+            return {"action": "wait", "reasoning": "Could not parse vision response, waiting"}
         except Exception as e:
             logger.error(f"Vision model failed: {str(e)}")
             return {"action": "wait", "reasoning": f"Error: {str(e)}"}
@@ -269,7 +333,7 @@ If you see an error or session timeout, indicate that."""
         """
         Solve CAPTCHA using vision model
         """
-        if not USE_ANTHROPIC:
+        if not self._use_bedrock:
             return None
             
         try:
@@ -279,32 +343,9 @@ If you see an error or session timeout, indicate that."""
             
             if region:
                 prompt += f" Focus on the region around coordinates (x:{region.get('x')}, y:{region.get('y')})."
-                
-            response = await self.anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=20,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
             
-            captcha_answer = response.content[0].text.strip()
+            captcha_answer = await self._call_vision_bedrock(image_base64, prompt, max_tokens=20)
+            captcha_answer = captcha_answer.strip()
             logger.info(f"CAPTCHA solved by vision: {captcha_answer}")
             return captcha_answer
             
@@ -316,7 +357,7 @@ If you see an error or session timeout, indicate that."""
         """
         Detect if page shows an error
         """
-        if not USE_ANTHROPIC:
+        if not self._use_bedrock:
             return False
             
         try:
@@ -324,32 +365,9 @@ If you see an error or session timeout, indicate that."""
             
             prompt = "Analyze this page screenshot. Does it contain a prominent error message, access denied warning, or a critical failure notification (e.g. 500 error, 'service unavailable', red alert banner)? Respond with ONLY 'YES' or 'NO'."
             
-            response = await self.anthropic.messages.create(
-                model="claude-3-5-sonnet-20241022",
-                max_tokens=10,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": image_base64
-                                }
-                            },
-                            {
-                                "type": "text",
-                                "text": prompt
-                            }
-                        ]
-                    }
-                ]
-            )
+            answer = await self._call_vision_bedrock(image_base64, prompt, max_tokens=10)
+            has_error = "YES" in answer.upper()
             
-            answer = response.content[0].text.strip().upper()
-            has_error = "YES" in answer
             if has_error:
                 logger.warning("Agent detected an error on the page via vision model.")
             return has_error

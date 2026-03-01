@@ -5,10 +5,12 @@ Autonomous web navigation using AWS Bedrock Agents + Visual Navigation
 import sys
 import asyncio
 
-# Fix Playwright asyncio error on Windows
+# Fix Playwright asyncio on Windows - use WindowsProactorEventLoopPolicy
+# This must be done BEFORE uvicorn starts its own loop
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
@@ -25,7 +27,45 @@ from services.agent.session_manager import SessionManager
 # Initialize
 settings = get_settings()
 logger = setup_logging("agent-service")
-app = FastAPI(title="GramSetu Agent Service", version="1.0.0")
+
+# Service components (initialized lazily in lifespan)
+bedrock_controller = BedrockAgentController()
+visual_navigator = VisualNavigator()
+session_manager = SessionManager()
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events"""
+    # Startup
+    logger.info("Agent service starting up")
+    try:
+        await visual_navigator.initialize()
+        logger.info("Visual navigator initialized successfully")
+    except Exception as e:
+        logger.error(f"Visual navigator initialization failed: {e}, continuing without browser")
+
+    try:
+        await session_manager.initialize()
+        logger.info("Session manager initialized")
+    except Exception as e:
+        logger.warning(f"Session manager init failed: {e}")
+
+    yield
+
+    # Shutdown
+    logger.info("Agent service shutting down")
+    try:
+        await visual_navigator.cleanup()
+    except Exception as e:
+        logger.error(f"Cleanup error: {e}")
+
+
+app = FastAPI(
+    title="GramSetu Agent Service",
+    version="1.0.0",
+    lifespan=lifespan
+)
 
 # CORS
 app.add_middleware(
@@ -36,31 +76,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Service components
-bedrock_controller = BedrockAgentController()
-visual_navigator = VisualNavigator()
-session_manager = SessionManager()
-
-
-@app.on_event("startup")
-async def startup():
-    """Initialize browser and connections"""
-    logger.info("Agent service starting up")
-    await visual_navigator.initialize()
-    await session_manager.initialize()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Cleanup browsers"""
-    logger.info("Agent service shutting down")
-    await visual_navigator.cleanup()
-
 
 @app.get("/health")
 async def health_check():
     """Health check endpoint"""
-    return {"status": "healthy", "service": "agent"}
+    browser_ready = visual_navigator.browser is not None
+    return {
+        "status": "healthy",
+        "service": "agent",
+        "browser_ready": browser_ready
+    }
 
 
 @app.post("/execute-task", response_model=AgentResult)
@@ -71,7 +96,7 @@ async def execute_task(
 ):
     """
     Execute autonomous browser task
-    
+
     Flow:
     1. Load portal-specific driver (PM-KISAN, e-Shram, etc.)
     2. Restore session if available
@@ -88,31 +113,36 @@ async def execute_task(
             scheme=task.scheme,
             action=task.action
         )
-        
+
         # Update status to processing
         await redis.set_json(
             f"task:{task.task_id}:status",
             {"status": JobStatus.PROCESSING, "step": "Initializing browser"},
             expire=3600
         )
-        
+
+        # Check if browser is available
+        if visual_navigator.browser is None:
+            logger.warning("Browser not initialized, attempting to reinitialize...")
+            await visual_navigator.initialize()
+
         # Get portal-specific driver
         driver = await bedrock_controller.get_driver(task.scheme)
-        
+
         # Execute task using visual navigator
         result = await visual_navigator.execute(
             driver=driver,
             task=task,
             session_state=task.session_state
         )
-        
+
         # Save session for future use
         if result.status == JobStatus.COMPLETED:
             await session_manager.save_session(
                 task.task_id,
-                driver.get_session_state()
+                driver.get_session_state() if hasattr(driver, 'get_session_state') else {}
             )
-        
+
         logger.info(
             "Task execution complete",
             task_id=task.task_id,
@@ -123,7 +153,7 @@ async def execute_task(
         import requests
         try:
             phone_to_notify = task.form_data.get('citizen_phone') or ''
-            
+
             payload = {
                 "job_id": task.task_id,
                 "status": "completed" if result.status == JobStatus.COMPLETED else "failed",
@@ -134,9 +164,9 @@ async def execute_task(
             logger.info("Successfully pushed task completion to Orchestrator Core")
         except Exception as orchestrator_error:
             logger.warning(f"Could not reach orchestrator for completion sync: {orchestrator_error}")
-        
+
         return result
-        
+
     except Exception as e:
         logger.error(f"Task execution failed: {str(e)}", exc_info=True)
         return AgentResult(

@@ -2,6 +2,7 @@
 Member 1: Voice Interface Service
 Handles Bhashini ASR, translation, and intent classification
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 import base64
@@ -19,17 +20,6 @@ from services.voice.intent_classifier import IntentClassifier
 # Initialize
 settings = get_settings()
 logger = setup_logging("voice-service")
-app = FastAPI(title="GramSetu Voice Service", version="1.0.0")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Service components
 bhashini_client = BhashiniClient()
@@ -37,17 +27,29 @@ audio_processor = AudioProcessor()
 intent_classifier = IntentClassifier()
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize connections"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager"""
     logger.info("Voice service starting up")
-    await bhashini_client.initialize()
-
-
-@app.on_event("shutdown")
-async def shutdown():
-    """Cleanup"""
+    try:
+        await bhashini_client.initialize()
+        logger.info("Bhashini client initialized")
+    except Exception as e:
+        logger.warning(f"Bhashini init warning: {e}")
+    yield
     logger.info("Voice service shutting down")
+
+
+app = FastAPI(title="GramSetu Voice Service", version="1.0.0", lifespan=lifespan)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")

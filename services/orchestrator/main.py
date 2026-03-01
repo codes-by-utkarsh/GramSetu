@@ -2,6 +2,7 @@
 Member 4: Orchestrator Service
 Main API gateway, job queue management, WhatsApp integration
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Depends, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 import uuid
@@ -43,29 +44,40 @@ from services.orchestrator.whatsapp_client import WhatsAppClient
 # Initialize
 settings = get_settings()
 logger = setup_logging("orchestrator")
-app = FastAPI(title="GramSetu Orchestrator", version="1.0.0")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Service components
 job_manager = JobManager()
 whatsapp_client = WhatsAppClient()
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize connections"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown"""
     logger.info("Orchestrator starting up")
-    await job_manager.initialize()
-    await whatsapp_client.initialize()
+    try:
+        await job_manager.initialize()
+        logger.info("Job manager (DynamoDB) initialized")
+    except Exception as e:
+        logger.warning(f"Job manager init warning: {e}")
+    try:
+        await whatsapp_client.initialize()
+        logger.info("WhatsApp client (Twilio) initialized")
+    except Exception as e:
+        logger.warning(f"WhatsApp client init warning: {e}")
+    yield
+    logger.info("Orchestrator shutting down")
+
+
+app = FastAPI(title="GramSetu Orchestrator", version="1.0.0", lifespan=lifespan)
+
+# CORS - allow all origins for Expo web and mobile
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
@@ -186,10 +198,16 @@ async def auth_signup(req: SignupRequest):
         OTP_STORE[req.phone] = otp
         
         success = await whatsapp_client.send_otp(req.phone, otp)
-        if success:
-            return {"status": "success", "message": "OTP sent to WhatsApp for registration"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to send OTP via Twilio")
+        
+        # Always return success even if Twilio fails - OTP is in OTP_STORE
+        # In dev mode, return OTP in response for easy testing
+        resp = {"status": "success", "message": "OTP generated for registration"}
+        if not success:
+            logger.warning(f"WhatsApp OTP delivery failed for {req.phone}, OTP stored in memory")
+            resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
+        if settings.environment == "development":
+            resp["dev_otp"] = otp  # Only in dev mode!
+        return resp
     except HTTPException:
         raise
     except Exception as e:
@@ -210,10 +228,13 @@ async def auth_login(req: LoginRequest):
         # In a real app, verify password hash from DB here
         success = await whatsapp_client.send_otp(req.phone, otp)
         
-        if success:
-            return {"status": "success", "message": "OTP sent to WhatsApp"}
-        else:
-            raise HTTPException(status_code=500, detail="Failed to send OTP via Twilio")
+        resp = {"status": "success", "message": "OTP generated for login"}
+        if not success:
+            logger.warning(f"WhatsApp OTP delivery failed for {req.phone}, OTP stored in memory")
+            resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
+        if settings.environment == "development":
+            resp["dev_otp"] = otp  # Only in dev mode!
+        return resp
             
     except HTTPException:
         raise

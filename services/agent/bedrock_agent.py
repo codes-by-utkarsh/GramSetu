@@ -23,6 +23,10 @@ class PortalDriver:
     def get_workflow(self) -> list[str]:
         """Get expected workflow steps"""
         raise NotImplementedError
+    
+    def get_session_state(self) -> dict:
+        """Get current session state for caching"""
+        return {}
 
 
 class PMKisanDriver(PortalDriver):

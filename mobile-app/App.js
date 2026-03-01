@@ -576,12 +576,20 @@ function OtpScreen({ route, navigation }) {
 // ==========================================
 function DashboardScreen({ navigation }) {
     const t = useTranslation();
+    const { lang } = useContext(LanguageContext); // Fix: extract lang from context
     const [recording, setRecording] = useState(null);
     const [hasPermissions, setHasPermissions] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [user, setUser] = useState(null);
     const [networkOnline, setNetworkOnline] = useState(true);
     const [transcriptModal, setTranscriptModal] = useState({ visible: false, text: '', confidence: 0, intent: '' });
+
+    // Dynamic API base URL - works on browser (localhost) and Expo Go (device IP)
+    const API_BASE = typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost'
+        ? `http://${window.location.hostname}:8000`
+        : 'http://localhost:8000';
+    const VOICE_API = API_BASE.replace(':8000', ':8001');
+    const AGENT_API = API_BASE.replace(':8000', ':8002');
 
     const [queuedJobs, setQueuedJobs] = useState([
         { id: '1', title: 'PM-Kisan Status', citizen: 'Ramesh Kumar', status: 'completed', time: '10:30 AM' },
@@ -640,7 +648,7 @@ function DashboardScreen({ navigation }) {
             setQueuedJobs(currentJobs => [pendingJob, ...currentJobs]);
 
             // Transcribe and Understand the AI intent
-            const response = await fetch('http://localhost:8001/process-audio', {
+            const response = await fetch(`${VOICE_API}/process-audio`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -695,7 +703,7 @@ function DashboardScreen({ navigation }) {
         setQueuedJobs(currentJobs => [pendingJob, ...currentJobs]);
 
         try {
-            const response = await fetch('http://localhost:8002/execute-task', {
+            const response = await fetch(`${AGENT_API}/execute-task`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

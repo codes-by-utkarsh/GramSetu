@@ -164,6 +164,7 @@ class WhatsAppNotification(BaseModel):
     message_text: str = Field(..., description="Message content")
     image_url: Optional[str] = Field(None, description="Attachment URL")
     job_id: str = Field(..., description="Related job ID")
+    status: Optional["JobStatus"] = Field(None, description="Current job status")
 
 
 # ============================================

@@ -2,6 +2,7 @@
 Member 3: Document Processing Service
 Privacy-preserving OCR with edge-based Aadhaar masking
 """
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 import base64
@@ -23,17 +24,6 @@ from services.document.document_verifier import DocumentVerifier
 # Initialize
 settings = get_settings()
 logger = setup_logging("document-service")
-app = FastAPI(title="GramSetu Document Service", version="1.0.0")
-
-# CORS
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 # Service components
 aadhaar_masker = AadhaarMasker()
@@ -49,11 +39,29 @@ s3_client = boto3.client(
 )
 
 
-@app.on_event("startup")
-async def startup():
-    """Initialize OCR models"""
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager"""
     logger.info("Document service starting up")
-    await ocr_engine.initialize()
+    try:
+        await ocr_engine.initialize()
+        logger.info("OCR engine (AWS Textract) initialized")
+    except Exception as e:
+        logger.warning(f"OCR engine init warning: {e} - will use fallback")
+    yield
+    logger.info("Document service shutting down")
+
+
+app = FastAPI(title="GramSetu Document Service", version="1.0.0", lifespan=lifespan)
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/health")
