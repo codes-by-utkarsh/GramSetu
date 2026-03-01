@@ -2,7 +2,7 @@
 Shared configuration management for GramSetu
 Loads environment variables and provides centralized config access
 """
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from functools import lru_cache
 
@@ -79,7 +79,7 @@ class Settings(BaseSettings):
     jwt_expiration_hours: int = 24
     
     # CORS
-    cors_origins: str = "http://localhost:3000,http://localhost:19006"
+    cors_origins: str = "http://localhost:3000,http://localhost:19006,http://localhost:8081,http://localhost:8082,http://localhost:8083"
     
     # Privacy & Compliance
     data_retention_hours: int = 24
@@ -150,9 +150,7 @@ class Settings(BaseSettings):
         """Parse CORS origins into list"""
         return [origin.strip() for origin in self.cors_origins.split(",")]
     
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
 @lru_cache()

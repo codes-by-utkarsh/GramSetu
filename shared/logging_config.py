@@ -20,40 +20,46 @@ def setup_logging(service_name: str):
     # Remove default handler
     logger.remove()
     
-    # Determine format based on config
-    if settings.log_format == "json":
-        log_format = (
-            '{"time": "{time:YYYY-MM-DD HH:mm:ss.SSS}", '
-            '"level": "{level}", '
-            '"service": "' + service_name + '", '
-            '"message": "{message}", '
-            '"extra": {extra}}'
-        )
-    else:
-        log_format = (
-            "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
-            "<level>{level: <8}</level> | "
-            "<cyan>" + service_name + "</cyan> | "
-            "<level>{message}</level>"
-        )
-    
     # Add console handler
-    logger.add(
-        sys.stdout,
-        format=log_format,
-        level=settings.log_level,
-        colorize=(settings.log_format != "json"),
-    )
+    if settings.log_format == "json":
+        logger.add(sys.stdout, serialize=True, level=settings.log_level)
+    else:
+        logger.add(
+            sys.stdout,
+            format=(
+                "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+                "<level>{level: <8}</level> | "
+                "<cyan>" + service_name + "</cyan> | "
+                "<level>{message}</level>"
+            ),
+            level=settings.log_level,
+            colorize=True,
+        )
     
     # Add file handler
-    logger.add(
-        f"logs/{service_name}.log",
-        format=log_format,
-        level=settings.log_level,
-        rotation="100 MB",
-        retention="7 days",
-        compression="zip",
-    )
+    if settings.log_format == "json":
+        logger.add(
+            f"logs/{service_name}.log",
+            serialize=True,
+            level=settings.log_level,
+            rotation="100 MB",
+            retention="7 days",
+            compression="zip",
+        )
+    else:
+        logger.add(
+            f"logs/{service_name}.log",
+            format=(
+                "<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | "
+                "<level>{level: <8}</level> | "
+                "<cyan>" + service_name + "</cyan> | "
+                "<level>{message}</level>"
+            ),
+            level=settings.log_level,
+            rotation="100 MB",
+            retention="7 days",
+            compression="zip",
+        )
     
     logger.info(f"{service_name} logging initialized", level=settings.log_level)
     

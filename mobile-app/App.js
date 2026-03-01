@@ -1,11 +1,14 @@
+import 'react-native-gesture-handler';
 import React, { useState, useEffect, createContext, useContext } from 'react';
 import { View, StyleSheet, Text, Animated, TouchableOpacity, Alert, TextInput, ScrollView, ActivityIndicator, Image } from 'react-native';
-import { Button, Appbar, Card, Title, Paragraph, Provider as PaperProvider, Avatar, MD3LightTheme } from 'react-native-paper';
+import { Button, Appbar, Card, Title, Paragraph, Provider as PaperProvider, Avatar, MD3LightTheme, Badge, Modal, Portal } from 'react-native-paper';
 import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
+import { createDrawerNavigator, DrawerContentScrollView, DrawerItemList, DrawerItem } from '@react-navigation/drawer';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import { Camera } from 'expo-camera';
+import * as FileSystem from 'expo-file-system';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Picker } from '@react-native-picker/picker';
@@ -152,6 +155,7 @@ const gramSetuTheme = {
 };
 
 const Stack = createStackNavigator();
+const Drawer = createDrawerNavigator();
 
 // ==========================================
 // Reusable Gradient
@@ -527,6 +531,8 @@ function DashboardScreen({ navigation }) {
     const [hasPermissions, setHasPermissions] = useState(false);
     const [isProcessing, setIsProcessing] = useState(false);
     const [user, setUser] = useState(null);
+    const [networkOnline, setNetworkOnline] = useState(true);
+    const [transcriptModal, setTranscriptModal] = useState({ visible: false, text: '', confidence: 0, intent: '' });
 
     const [queuedJobs, setQueuedJobs] = useState([
         { id: '1', title: 'PM-Kisan Status', citizen: 'Ramesh Kumar', status: 'completed', time: '10:30 AM' },
@@ -541,6 +547,11 @@ function DashboardScreen({ navigation }) {
 
             const u = await AsyncStorage.getItem('user');
             if (u) setUser(JSON.parse(u));
+
+            // Simulate Network Watcher
+            setInterval(() => {
+                setNetworkOnline(Math.random() > 0.1);
+            }, 10000);
         })();
     }, []);
 
@@ -561,20 +572,119 @@ function DashboardScreen({ navigation }) {
     };
 
     const stopRecording = async () => {
+        const currentRecording = recording;
         setRecording(undefined);
         setIsProcessing(true);
-        await recording.stopAndUnloadAsync();
 
-        const newJobId = Math.floor(Math.random() * 1000).toString();
-        const newJob = { id: newJobId, title: 'Voice Request...', citizen: 'Unknown', status: 'processing', time: 'Just now' };
-        setQueuedJobs([newJob, ...queuedJobs]);
+        try {
+            await currentRecording.stopAndUnloadAsync();
+            const uri = currentRecording.getURI();
 
-        setTimeout(() => {
-            setIsProcessing(false);
+            // Read the audio file as Base64 format
+            const audioBase64 = await FileSystem.readAsStringAsync(uri, {
+                encoding: FileSystem.EncodingType.Base64,
+            });
+
+            // Create a pending visual job ticket
+            const newJobId = Math.floor(Math.random() * 1000).toString();
+            const pendingJob = { id: newJobId, title: 'Voice Request - Analyzing...', citizen: 'Unknown', status: 'processing', time: 'Just now' };
+            setQueuedJobs(currentJobs => [pendingJob, ...currentJobs]);
+
+            // Transcribe and Understand the AI intent
+            const response = await fetch('http://localhost:8001/process-audio', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    audio_base64: audioBase64,
+                    language_hint: lang === 'en' ? 'hi' : lang, // default to hindi for English fallback
+                    vle_id: user?.phone || 'unknown',
+                    session_id: 'voice-' + newJobId
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to process voice command');
+
+            const voiceResult = await response.json();
+
+            // Map AI's detected intent down to a UI friendly state
+            let friendlyTitle = voiceResult.scheme ? voiceResult.scheme.replace('_', ' ').toUpperCase() : 'General Support';
+            friendlyTitle += ` (${voiceResult.intent})`;
+
             setQueuedJobs(currentJobs => currentJobs.map(job =>
-                job.id === newJobId ? { ...job, title: 'e-Shram Registration', citizen: 'Verify Name', status: 'pending_scan' } : job
+                job.id === newJobId ? {
+                    ...job,
+                    title: friendlyTitle,
+                    citizen: 'Requires Details',
+                    status: voiceResult.missing_info?.length > 0 ? 'pending_scan' : 'completed'
+                } : job
             ));
-        }, 2000);
+
+            // Show feedback modal
+            setTranscriptModal({
+                visible: true,
+                text: voiceResult.transcript || 'Unknown Audio',
+                confidence: Math.round((voiceResult.confidence || 0) * 100),
+                intent: voiceResult.intent || 'Unknown'
+            });
+
+        } catch (err) {
+            console.error(err);
+            Alert.alert('Voice Processing Error', 'Make sure port 8001 Voice Service is running.');
+        } finally {
+            setIsProcessing(false);
+        }
+    };
+
+    const executeAgentTask = async (schemeId, intentAction) => {
+        Alert.alert(
+            "Initializing Automation",
+            `Connecting to Visual Agent for ${schemeId.toUpperCase()}...`
+        );
+
+        const newJobId = Math.floor(Math.random() * 10000).toString();
+        const pendingJob = { id: newJobId, title: `Agent: ${schemeId}`, citizen: 'Executing Form...', status: 'processing', time: 'Just now' };
+        setQueuedJobs(currentJobs => [pendingJob, ...currentJobs]);
+
+        try {
+            const response = await fetch('http://localhost:8002/execute-task', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    task_id: newJobId,
+                    scheme: schemeId,
+                    action: intentAction,
+                    form_data: {
+                        "name": user?.fullName || "Demo User",
+                        "citizen_phone": user?.twilioNumber || user?.phone || "+919999999999"
+                    },
+                    session_state: null
+                })
+            });
+
+            const result = await response.json();
+
+            setQueuedJobs(currentJobs => currentJobs.map(job =>
+                job.id === newJobId ? {
+                    ...job,
+                    title: `Agent (${schemeId})`,
+                    citizen: result.acknowledgement_number || 'Completed',
+                    status: result.status === 'failed' ? 'error' : 'completed'
+                } : job
+            ));
+
+            if (result.status === 'completed') {
+                Alert.alert("Agent Success!", "Visual execution complete.");
+            } else {
+                Alert.alert("Agent Warning", result.error_message || "Task did not complete successfully.");
+            }
+        } catch (e) {
+            console.error(e);
+            Alert.alert("Agent Offline", "Check if Port 8002 AWS Bedrock Agent Service is running.");
+
+            setQueuedJobs(currentJobs => currentJobs.map(job =>
+                job.id === newJobId ? { ...job, status: 'error', citizen: 'Failed' } : job
+            ));
+        }
     };
 
     const renderJobStatusIcon = (status) => {
@@ -590,9 +700,26 @@ function DashboardScreen({ navigation }) {
     return (
         <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
             <Appbar.Header style={{ backgroundColor: gramSetuTheme.colors.primary, elevation: 5 }}>
+                <Appbar.Action icon="menu" color="#ffffff" onPress={() => navigation.toggleDrawer()} />
                 <Appbar.Content title={t.appName} subtitle={`VLE: ${user?.phone || '...'}`} color="#ffffff" />
-                <Appbar.Action icon="logout" color="#ffffff" onPress={handleLogout} />
+                <Badge size={14} style={{ backgroundColor: networkOnline ? '#4CAF50' : '#F44336', marginRight: 15, marginBottom: 15 }} />
             </Appbar.Header>
+
+            <Portal>
+                <Modal visible={transcriptModal.visible} onDismiss={() => setTranscriptModal({ ...transcriptModal, visible: false })} contentContainerStyle={styles.modalContainer}>
+                    <Title style={styles.modalTitle}>AI Brain Feedback</Title>
+                    <Paragraph style={{ fontSize: 16, marginBottom: 10 }}>
+                        <Text style={{ fontWeight: 'bold', color: '#B0BEC5' }}>Heard:</Text> "{transcriptModal.text}"
+                    </Paragraph>
+                    <Paragraph style={{ fontSize: 14 }}>
+                        <Text style={{ fontWeight: 'bold' }}>Mapped Intent:</Text> {transcriptModal.intent.toUpperCase()}
+                    </Paragraph>
+                    <Paragraph style={{ fontSize: 14, color: transcriptModal.confidence > 80 ? '#4CAF50' : '#FF9800' }}>
+                        <Text style={{ fontWeight: 'bold', color: '#333' }}>Confidence Match:</Text> {transcriptModal.confidence}%
+                    </Paragraph>
+                    <Button mode="contained" onPress={() => setTranscriptModal({ ...transcriptModal, visible: false })} style={{ marginTop: 20 }} buttonColor={gramSetuTheme.colors.primary}>Got It</Button>
+                </Modal>
+            </Portal>
 
             <ScrollView style={styles.dashboardContainer} contentContainerStyle={{ paddingBottom: 40 }}>
                 {/* Hero Section */}
@@ -623,19 +750,71 @@ function DashboardScreen({ navigation }) {
                     </Card.Content>
                 </LinearGradient>
 
+                {/* Stats Section */}
+                <View style={styles.statsContainer}>
+                    <Card style={styles.statCard}>
+                        <Card.Content style={styles.statContent}>
+                            <Icon name="check-decagram" size={30} color="#4CAF50" />
+                            <Text style={styles.statValue}>124</Text>
+                            <Text style={styles.statLabel}>Completed</Text>
+                        </Card.Content>
+                    </Card>
+                    <Card style={styles.statCard}>
+                        <Card.Content style={styles.statContent}>
+                            <Icon name="clock-fast" size={30} color="#FF9800" />
+                            <Text style={styles.statValue}>8</Text>
+                            <Text style={styles.statLabel}>Pending</Text>
+                        </Card.Content>
+                    </Card>
+                    <Card style={styles.statCard}>
+                        <Card.Content style={styles.statContent}>
+                            <Icon name="currency-inr" size={30} color="#2196F3" />
+                            <Text style={styles.statValue}>4.2k</Text>
+                            <Text style={styles.statLabel}>Earned</Text>
+                        </Card.Content>
+                    </Card>
+                </View>
+
+                {/* Quick Actions */}
                 <View style={styles.quickActionsContainer}>
-                    <Button
-                        mode="contained"
-                        icon="card-bulleted-outline"
-                        buttonColor={"#ffffff"}
-                        textColor={gramSetuTheme.colors.primary}
-                        style={styles.actionButton}
-                        contentStyle={{ paddingVertical: 8 }}
-                        labelStyle={{ fontWeight: 'bold', fontSize: 16 }}
-                        onPress={() => Alert.alert(t.scanAadhaar, 'Opening Edge-Masking Camera...')}
-                    >
-                        {t.scanAadhaar}
-                    </Button>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                        <Button
+                            mode="contained"
+                            icon="camera-document"
+                            buttonColor={"#ffffff"}
+                            textColor={gramSetuTheme.colors.primary}
+                            style={styles.actionButton}
+                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
+                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
+                            onPress={() => navigation.navigate('Scanner')}
+                        >
+                            {t.scanAadhaar}
+                        </Button>
+                        <Button
+                            mode="contained"
+                            icon="tractor"
+                            buttonColor={"#ffffff"}
+                            textColor={gramSetuTheme.colors.primary}
+                            style={[styles.actionButton, { marginLeft: 10 }]}
+                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
+                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
+                            onPress={() => executeAgentTask('pm_kisan', 'apply_new')}
+                        >
+                            PM-Kisan
+                        </Button>
+                        <Button
+                            mode="contained"
+                            icon="card-account-details-outline"
+                            buttonColor={"#ffffff"}
+                            textColor={gramSetuTheme.colors.primary}
+                            style={[styles.actionButton, { marginLeft: 10 }]}
+                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
+                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
+                            onPress={() => executeAgentTask('e_shram', 'register')}
+                        >
+                            e-Shram
+                        </Button>
+                    </ScrollView>
                 </View>
 
                 <Title style={styles.sectionTitle}>{t.todayQueue}</Title>
@@ -663,6 +842,407 @@ function DashboardScreen({ navigation }) {
 }
 
 // ==========================================
+// 6b. Profile Screen
+// ==========================================
+function ProfileScreen({ navigation }) {
+    const [fullName, setFullName] = useState('');
+    const [phone, setPhone] = useState('');
+    const [twilioNumber, setTwilioNumber] = useState('');
+    const [dob, setDob] = useState('');
+    const [cscId, setCscId] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    useEffect(() => {
+        (async () => {
+            const u = await AsyncStorage.getItem('user');
+            if (u) {
+                const parsed = JSON.parse(u);
+                setPhone(parsed.phone || '');
+                setTwilioNumber(parsed.twilioNumber || '');
+                // Try fetching remote profile
+                try {
+                    const resp = await fetch(`http://localhost:8000/user/${parsed.phone}`);
+                    if (resp.ok) {
+                        const data = await resp.json();
+                        setFullName(data.data.full_name || '');
+                        setTwilioNumber(data.data.twilio_number || '');
+                        setDob(data.data.dob || '');
+                        setCscId(data.data.csc_id || '');
+                    }
+                } catch (e) { }
+            }
+        })();
+    }, []);
+
+    const handleSave = async () => {
+        setLoading(true);
+        try {
+            const response = await fetch('http://localhost:8000/user/update', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    phone: phone,
+                    fullName: fullName,
+                    twilioNumber: twilioNumber,
+                    dob: dob,
+                    cscId: cscId
+                })
+            });
+
+            if (!response.ok) throw new Error('Failed to update profile on server.');
+
+            // update local cache
+            const u = await AsyncStorage.getItem('user');
+            if (u) {
+                const parsed = JSON.parse(u);
+                parsed.twilioNumber = twilioNumber;
+                await AsyncStorage.setItem('user', JSON.stringify(parsed));
+            }
+
+            Alert.alert('Success', 'Profile updated successfully!');
+            navigation.goBack();
+        } catch (e) {
+            Alert.alert('Error', e.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    return (
+        <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
+            <Appbar.Header style={{ backgroundColor: gramSetuTheme.colors.primary, elevation: 5 }}>
+                <Appbar.BackAction color="#fff" onPress={() => navigation.goBack()} />
+                <Appbar.Content title="VLE Profile Panel" color="#fff" titleStyle={{ fontWeight: 'bold' }} />
+            </Appbar.Header>
+            <ScrollView contentContainerStyle={{ padding: 25, paddingBottom: 50 }}>
+
+                <View style={{ alignItems: 'center', marginBottom: 30 }}>
+                    <View style={{
+                        elevation: 8,
+                        shadowColor: gramSetuTheme.colors.primary,
+                        shadowOffset: { width: 0, height: 4 },
+                        shadowOpacity: 0.3,
+                        shadowRadius: 5,
+                        borderRadius: 60,
+                        backgroundColor: '#fff',
+                        padding: 5
+                    }}>
+                        <Avatar.Icon size={110} icon="card-account-details-outline" style={{ backgroundColor: gramSetuTheme.colors.secondary }} />
+                    </View>
+                    <Title style={{ marginTop: 15, fontWeight: '800', color: gramSetuTheme.colors.primary, fontSize: 24 }}>
+                        {fullName || "VLE Profile"}
+                    </Title>
+                    <Text style={{ color: '#666', fontWeight: '500' }}>Manage your CSC Identity</Text>
+                </View>
+
+                <Card style={{ borderRadius: 16, elevation: 4, marginBottom: 20, backgroundColor: '#fff' }}>
+                    <Card.Content>
+                        <Text style={styles.inputLabel}>Full Legal Name</Text>
+                        <TextInput
+                            style={styles.profileInput}
+                            placeholder="Enter full name"
+                            value={fullName}
+                            onChangeText={setFullName}
+                        />
+
+                        <Text style={styles.inputLabel}>Date of Birth</Text>
+                        <TextInput
+                            style={styles.profileInput}
+                            placeholder="DD/MM/YYYY"
+                            value={dob}
+                            onChangeText={setDob}
+                            keyboardType="numeric"
+                        />
+
+                        <Text style={styles.inputLabel}>CSC Gateway ID</Text>
+                        <TextInput
+                            style={styles.profileInput}
+                            placeholder="e.g. CSC-UP-4592"
+                            value={cscId}
+                            onChangeText={setCscId}
+                            autoCapitalize="characters"
+                        />
+                    </Card.Content>
+                </Card>
+
+                <Card style={{ borderRadius: 16, elevation: 4, marginBottom: 25, backgroundColor: '#fff' }}>
+                    <Card.Content>
+                        <Text style={styles.inputLabel}>Registered WhatsApp (Verified)</Text>
+                        <TextInput
+                            style={[styles.profileInput, { backgroundColor: '#f0f0f0', color: '#888' }]}
+                            value={phone}
+                            editable={false}
+                            selectTextOnFocus={false}
+                        />
+
+                        <Text style={styles.inputLabel}>Twilio API Sender Number</Text>
+                        <TextInput
+                            style={styles.profileInput}
+                            placeholder="+1 (555) 123-4567"
+                            value={twilioNumber}
+                            onChangeText={setTwilioNumber}
+                            keyboardType="phone-pad"
+                        />
+                    </Card.Content>
+                </Card>
+
+                <Button
+                    mode="contained"
+                    onPress={handleSave}
+                    loading={loading}
+                    disabled={loading}
+                    style={{ borderRadius: 12, elevation: 5 }}
+                    contentStyle={{ paddingVertical: 8 }}
+                    labelStyle={{ fontSize: 18, fontWeight: 'bold' }}
+                    buttonColor={gramSetuTheme.colors.primary}
+                    icon="content-save-check"
+                >
+                    Save Changes
+                </Button>
+            </ScrollView>
+        </View>
+    );
+}
+
+// ==========================================
+// 7. Aadhaar Scanner Screen (Edge OCR & Masking)
+// ==========================================
+function ScannerScreen({ navigation }) {
+    const [hasPermission, setHasPermission] = useState(null);
+    const [cameraRef, setCameraRef] = useState(null);
+    const [processing, setProcessing] = useState(false);
+
+    useEffect(() => {
+        (async () => {
+            const { status } = await Camera.requestCameraPermissionsAsync();
+            setHasPermission(status === 'granted');
+        })();
+    }, []);
+
+    const takePicture = async () => {
+        if (cameraRef && !processing) {
+            setProcessing(true);
+            try {
+                const photo = await cameraRef.takePictureAsync({ base64: true, quality: 0.5 });
+
+                // Submit to local Document API on Port 8003
+                const response = await fetch('http://localhost:8003/process-document', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        image_base64: photo.base64,
+                        document_type: "aadhaar",
+                        apply_masking: true,
+                        vle_id: "demo-vle"
+                    })
+                });
+
+                if (!response.ok) throw new Error("Document analysis failed");
+                const data = await response.json();
+
+                Alert.alert("OCR Success!", "Aadhaar securely masked and parsed via AWS Edge Infrastructure.");
+                navigation.goBack();
+            } catch (error) {
+                console.error(error);
+                Alert.alert("OCR Error", "Ensure the backend Document Service on port 8003 is active!");
+            } finally {
+                setProcessing(false);
+            }
+        }
+    };
+
+    if (hasPermission === null) return <View style={{ flex: 1, backgroundColor: '#000' }} />;
+    if (hasPermission === false) return <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}><Text>No access to camera</Text></View>;
+
+    return (
+        <View style={{ flex: 1 }}>
+            <Appbar.Header style={{ backgroundColor: '#000000' }}>
+                <Appbar.BackAction color="#fff" onPress={() => navigation.goBack()} />
+                <Appbar.Content title="Aadhaar Edge Scanner" color="#fff" />
+            </Appbar.Header>
+            <Camera style={{ flex: 1 }} type={Camera.Constants?.Type?.back || 0} ref={(ref) => setCameraRef(ref)}>
+                <View style={{ flex: 1, backgroundColor: 'transparent', flexDirection: 'row', justifyContent: 'center', alignItems: 'flex-end', paddingBottom: 40 }}>
+                    <TouchableOpacity onPress={takePicture} disabled={processing}>
+                        <View style={{ width: 80, height: 80, borderRadius: 40, backgroundColor: processing ? '#ccc' : '#ffffff', justifyContent: 'center', alignItems: 'center', borderWidth: 5, borderColor: 'rgba(0,0,0,0.2)' }}>
+                            {processing && <ActivityIndicator size="large" color="#000" />}
+                        </View>
+                    </TouchableOpacity>
+                </View>
+            </Camera>
+        </View>
+    );
+}
+
+// ==========================================
+// 9. Offline Beneficiary Database Tracker
+// ==========================================
+function BeneficiariesScreen({ navigation }) {
+    const defaultData = [
+        { id: 1, name: 'Suresh Kumar', aadhar: 'xxxx-xxxx-8392', phone: '9882XXXX91', sync: true },
+        { id: 2, name: 'Lakshmi Devi', aadhar: 'xxxx-xxxx-1102', phone: '9432XXXX88', sync: false },
+        { id: 3, name: 'Rahul Singh', aadhar: 'xxxx-xxxx-4475', phone: '9123XXXX54', sync: true }
+    ];
+
+    return (
+        <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
+            <Appbar.Header style={{ backgroundColor: gramSetuTheme.colors.primary }}>
+                <Appbar.Action icon="menu" color="#fff" onPress={() => navigation.toggleDrawer()} />
+                <Appbar.Content title="Citizen Directory" color="#fff" subtitle="Local Offline Encrypted" />
+            </Appbar.Header>
+
+            <ScrollView contentContainerStyle={{ padding: 20 }}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+                    <Title style={{ fontSize: 20, fontWeight: '800', color: gramSetuTheme.colors.primary }}>Offline Cache</Title>
+                    <Button icon="plus" mode="outlined" compact textColor={gramSetuTheme.colors.primary} style={{ borderColor: gramSetuTheme.colors.primary }}>Add New</Button>
+                </View>
+
+                {defaultData.map((citizen) => (
+                    <Card key={citizen.id} style={{ marginBottom: 12, borderRadius: 12, elevation: 2, backgroundColor: '#ffffff' }}>
+                        <Card.Title
+                            title={citizen.name}
+                            subtitle={`Phone: ${citizen.phone}`}
+                            left={(props) => <Avatar.Icon {...props} icon="account" style={{ backgroundColor: gramSetuTheme.colors.secondary }} />}
+                            right={(props) => (
+                                <View style={{ alignItems: 'center', marginRight: 15 }}>
+                                    <Icon name={citizen.sync ? 'cloud-check' : 'cloud-sync'} size={24} color={citizen.sync ? '#4CAF50' : '#FF9800'} />
+                                    <Text style={{ fontSize: 10, color: '#888', marginTop: 3 }}>{citizen.sync ? 'Synced' : 'Waiting'}</Text>
+                                </View>
+                            )}
+                        />
+                        <Card.Content>
+                            <Paragraph style={{ color: '#555', fontSize: 13, fontWeight: 'bold' }}>Aadhaar: {citizen.aadhar}</Paragraph>
+                        </Card.Content>
+                    </Card>
+                ))}
+            </ScrollView>
+        </View>
+    );
+}
+
+// ==========================================
+// Custom Drawer Content (for logout & profile details)
+// ==========================================
+function CustomDrawerContent(props) {
+    const handleLogout = async () => {
+        await AsyncStorage.removeItem('user');
+        props.navigation.replace('Auth');
+    };
+
+    return (
+        <DrawerContentScrollView {...props} style={{ backgroundColor: '#ffffff' }}>
+            <View style={{
+                padding: 25,
+                borderBottomWidth: 1,
+                borderBottomColor: '#e0e0e0',
+                marginBottom: 10,
+                alignItems: 'center',
+                backgroundColor: gramSetuTheme.colors.primary
+            }}>
+                <View style={{ backgroundColor: '#fff', padding: 5, borderRadius: 100, elevation: 5 }}>
+                    <Image
+                        source={require('./assets/logo.png')}
+                        style={{ width: 80, height: 80, resizeMode: 'contain' }}
+                        onError={() => { }}
+                    />
+                </View>
+                <Title style={{ color: '#ffffff', marginTop: 15, fontWeight: '800', letterSpacing: 1 }}>GramSetu</Title>
+                <Text style={{ color: '#80bfff', fontWeight: '500' }}>VLE Console</Text>
+            </View>
+            <DrawerItemList {...props} />
+
+            <View style={{ flex: 1, marginTop: 40, borderTopWidth: 1, borderTopColor: '#f0f0f0', paddingTop: 10 }}>
+                <DrawerItem
+                    label="Logout Agent"
+                    labelStyle={{ color: '#D32F2F', fontWeight: 'bold' }}
+                    icon={({ size }) => <Icon name="logout-variant" color="#D32F2F" size={size} />}
+                    onPress={handleLogout}
+                />
+            </View>
+        </DrawerContentScrollView>
+    );
+}
+
+// ==========================================
+// Drawer Navigator Wrapper
+// ==========================================
+function DrawerNavigator() {
+    return (
+        <Drawer.Navigator
+            drawerContent={(props) => <CustomDrawerContent {...props} />}
+            screenOptions={{
+                headerShown: false,
+                drawerActiveTintColor: gramSetuTheme.colors.secondary,
+                drawerInactiveTintColor: '#333'
+            }}
+        >
+            <Drawer.Screen
+                name="Home"
+                component={DashboardScreen}
+                options={{ drawerIcon: ({ color }) => <Icon name="home-outline" size={24} color={color} /> }}
+            />
+            <Drawer.Screen
+                name="Profile"
+                component={ProfileScreen}
+                options={{ drawerIcon: ({ color }) => <Icon name="account-cog-outline" size={24} color={color} /> }}
+            />
+            <Drawer.Screen
+                name="History"
+                component={AnalyticsScreen}
+                options={{ drawerIcon: ({ color }) => <Icon name="chart-bar" size={24} color={color} /> }}
+            />
+            <Drawer.Screen
+                name="Beneficiaries"
+                component={BeneficiariesScreen}
+                options={{ drawerIcon: ({ color }) => <Icon name="account-group-outline" size={24} color={color} /> }}
+            />
+        </Drawer.Navigator>
+    );
+}
+
+// ==========================================
+// 8. Analytics & History Component
+// ==========================================
+function AnalyticsScreen({ navigation }) {
+    return (
+        <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
+            <Appbar.Header style={{ backgroundColor: gramSetuTheme.colors.primary }}>
+                <Appbar.BackAction color="#fff" onPress={() => navigation.goBack()} />
+                <Appbar.Content title="Activity History & Earnings" color="#fff" />
+            </Appbar.Header>
+            <ScrollView contentContainerStyle={{ padding: 20 }}>
+                <Title style={{ fontSize: 20, fontWeight: 'bold', color: gramSetuTheme.colors.primary, marginBottom: 15 }}>Recent Transactions</Title>
+
+                <Card style={{ marginBottom: 15, borderRadius: 12, elevation: 2, backgroundColor: '#fff' }}>
+                    <Card.Title
+                        title="PM-Kisan Registration"
+                        subtitle="Manoj Kumar - Successful"
+                        left={(props) => <Avatar.Icon {...props} icon="tractor" style={{ backgroundColor: '#e3f2fd' }} color="#1976D2" />}
+                        right={(props) => <Text style={{ marginRight: 20, fontWeight: 'bold', color: '#4CAF50' }}>+₹50</Text>}
+                    />
+                </Card>
+
+                <Card style={{ marginBottom: 15, borderRadius: 12, elevation: 2, backgroundColor: '#fff' }}>
+                    <Card.Title
+                        title="e-Shram Card Print"
+                        subtitle="Geeta Devi - Successful"
+                        left={(props) => <Avatar.Icon {...props} icon="card-account-details-outline" style={{ backgroundColor: '#fbe9e7' }} color="#D84315" />}
+                        right={(props) => <Text style={{ marginRight: 20, fontWeight: 'bold', color: '#4CAF50' }}>+₹30</Text>}
+                    />
+                </Card>
+
+                <Card style={{ marginBottom: 15, borderRadius: 12, elevation: 2, backgroundColor: '#fff' }}>
+                    <Card.Title
+                        title="Aadhaar Masking Edge API"
+                        subtitle="System Request - Synced"
+                        left={(props) => <Avatar.Icon {...props} icon="camera-document" style={{ backgroundColor: '#e0f2f1' }} color="#00796B" />}
+                    />
+                </Card>
+            </ScrollView>
+        </View>
+    );
+}
+
+// ==========================================
 // Root App Component
 // ==========================================
 export default function App() {
@@ -678,7 +1258,8 @@ export default function App() {
                         <Stack.Screen name="Auth" component={AuthScreen} />
                         <Stack.Screen name="NewUserSetup" component={NewUserSetupScreen} />
                         <Stack.Screen name="OTP" component={OtpScreen} />
-                        <Stack.Screen name="Dashboard" component={DashboardScreen} />
+                        <Stack.Screen name="Dashboard" component={DrawerNavigator} />
+                        <Stack.Screen name="Scanner" component={ScannerScreen} />
                     </Stack.Navigator>
                 </NavigationContainer>
             </PaperProvider>
@@ -693,6 +1274,8 @@ const styles = StyleSheet.create({
     container: { flex: 1 },
     dashboardContainer: { flex: 1, padding: 16 },
     centerAll: { justifyContent: 'center', alignItems: 'center' },
+    modalContainer: { backgroundColor: 'white', padding: 25, margin: 20, borderRadius: 16, elevation: 5 },
+    modalTitle: { color: gramSetuTheme.colors.primary, fontWeight: 'bold', borderBottomWidth: 1, borderBottomColor: '#eee', paddingBottom: 10, marginBottom: 15 },
 
     // Splash
     splashTitle: { fontSize: 45, fontWeight: '900', marginTop: 20, letterSpacing: 1 },
@@ -716,9 +1299,37 @@ const styles = StyleSheet.create({
     micGradient: { flex: 1, borderRadius: 65, justifyContent: 'center', alignItems: 'center' },
     micButtonRecording: { transform: [{ scale: 1.15 }] },
     micHelperText: { marginTop: 25, fontWeight: '700', fontSize: 16 },
-    quickActionsContainer: { marginBottom: 20 },
+
+    // Stats specific
+    statsContainer: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
+    statCard: { flex: 1, marginHorizontal: 5, borderRadius: 16, elevation: 3, backgroundColor: '#ffffff' },
+    statContent: { alignItems: 'center', paddingVertical: 15 },
+    statValue: { fontSize: 20, fontWeight: 'bold', color: '#333', marginTop: 5 },
+    statLabel: { fontSize: 12, color: '#777', marginTop: 2 },
+
+    quickActionsContainer: { marginBottom: 25 },
     actionButton: { borderRadius: 12, elevation: 3 },
     sectionTitle: { color: '#003366', fontWeight: '800', marginBottom: 15, fontSize: 22, letterSpacing: 0.5 },
     jobCard: { marginBottom: 12, backgroundColor: '#ffffff', borderRadius: 16, elevation: 2 },
-    jobActionRight: { flexDirection: 'row', alignItems: 'center' }
+    jobActionRight: { flexDirection: 'row', alignItems: 'center' },
+
+    // Profile Updates
+    inputLabel: {
+        fontSize: 14,
+        fontWeight: 'bold',
+        color: gramSetuTheme.colors.primary,
+        marginBottom: 5,
+        marginLeft: 5,
+        textTransform: 'uppercase'
+    },
+    profileInput: {
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+        borderRadius: 12,
+        padding: 15,
+        marginBottom: 20,
+        backgroundColor: '#fcfcfc',
+        fontSize: 16,
+        color: '#333'
+    }
 });

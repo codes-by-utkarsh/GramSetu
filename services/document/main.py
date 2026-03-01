@@ -9,6 +9,8 @@ import io
 from PIL import Image
 import cv2
 import numpy as np
+import boto3
+import uuid
 
 from shared.config import get_settings
 from shared.schemas import DocumentInput, DocumentOutput, DocumentType
@@ -27,6 +29,7 @@ app = FastAPI(title="GramSetu Document Service", version="1.0.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
+    allow_origin_regex=r"^http://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+)(:\d+)?$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -36,6 +39,14 @@ app.add_middleware(
 aadhaar_masker = AadhaarMasker()
 ocr_engine = OCREngine()
 document_verifier = DocumentVerifier()
+
+# Instantiate S3 Client (Serverless Blob)
+s3_client = boto3.client(
+    's3',
+    aws_access_key_id=settings.aws_access_key_id,
+    aws_secret_access_key=settings.aws_secret_access_key,
+    region_name=settings.aws_region
+)
 
 
 @app.on_event("startup")
@@ -71,7 +82,25 @@ async def process_document(doc_input: DocumentInput):
         )
         
         # Decode image
-        image_bytes = base64.b64decode(doc_input.image_base64)
+        base64_str = doc_input.image_base64
+        if ',' in base64_str:
+            base64_str = base64_str.split(',', 1)[1]
+            
+        # Strip any whitespace or newlines first
+        import re
+        base64_str = re.sub(r'[^A-Za-z0-9+/]', '', base64_str)
+            
+        # Add safety padding if missing, handling broken strings
+        pad_len = len(base64_str) % 4
+        if pad_len == 1:
+            # 1 char mod 4 is mathematically invalid base64, drop the broken trailing char
+            base64_str = base64_str[:-1]
+        elif pad_len == 2:
+            base64_str += '=='
+        elif pad_len == 3:
+            base64_str += '='
+            
+        image_bytes = base64.b64decode(base64_str)
         image = Image.open(io.BytesIO(image_bytes))
         
         # Apply masking if Aadhaar
@@ -92,6 +121,28 @@ async def process_document(doc_input: DocumentInput):
             doc_input.document_type,
             extracted_data
         )
+
+        # Upload masked image securely to S3
+        masked_image_url = None
+        try:
+            upload_byte_arr = io.BytesIO()
+            masked_image.save(upload_byte_arr, format='JPEG')
+            upload_bytes = upload_byte_arr.getvalue()
+            
+            s3_filename = f"secure_docs/{doc_input.vle_id}_{uuid.uuid4().hex[:8]}.jpg"
+            bucket_name = settings.s3_bucket_name or "gramsetu-storage"
+            
+            s3_client.put_object(
+                Bucket=bucket_name,
+                Key=s3_filename,
+                Body=upload_bytes,
+                ContentType="image/jpeg",
+                ServerSideEncryption="AES256"
+            )
+            masked_image_url = f"s3://{bucket_name}/{s3_filename}"
+            logger.info("Masked Document safely uploaded to AWS S3 Bucket", url=masked_image_url)
+        except Exception as e_s3:
+            logger.error(f"S3 Upload failed: {str(e_s3)}")
         
         logger.info(
             "Document processing complete",
@@ -102,6 +153,7 @@ async def process_document(doc_input: DocumentInput):
         return DocumentOutput(
             document_type=doc_input.document_type,
             extracted_data=extracted_data,
+            masked_image_url=masked_image_url,
             confidence_scores=confidence_scores,
             is_authentic=is_authentic,
             warnings=warnings

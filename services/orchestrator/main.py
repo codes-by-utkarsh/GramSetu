@@ -123,6 +123,48 @@ async def get_job_status(job_id: str):
         logger.error(f"Status retrieval failed: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
+class JobUpdateWebhook(BaseModel):
+    job_id: str
+    status: str
+    message: str
+    citizen_phone: str = ""
+
+@app.post("/internal/jobs/update-status")
+async def update_job_status(req: JobUpdateWebhook):
+    """Internal Webhook mapping between Agent Completion and AWS DynamoDB/Twilio updates"""
+    try:
+        # 1. Update AWS DynamoDB state
+        job_data = await job_manager.get_status(req.job_id)
+        if job_data:
+            job_manager.jobs_table.update_item(
+                Key={'job_id': req.job_id},
+                UpdateExpression="set #st = :s, current_step = :m, updated_at = :t",
+                ExpressionAttributeValues={
+                    ':s': req.status,
+                    ':m': req.message,
+                    ':t': datetime.utcnow().isoformat()
+                },
+                ExpressionAttributeNames={"#st": "status"}
+            )
+            logger.info("DynamoDB Job Tracker synchronized", job_id=req.job_id, new_status=req.status)
+        else:
+            logger.warning("Job not found in DynamoDB on async update", job_id=req.job_id)
+
+        # 2. Trigger Twilio WhatsApp Notification
+        if req.citizen_phone and req.citizen_phone != "unknown":
+            whatsapp_msg = WhatsAppNotification(
+                job_id=req.job_id,
+                recipient_phone=req.citizen_phone,
+                message_text=f"GramSetu AI Update: Your application status is now *{req.status}*.\nDetails: {req.message}",
+                status=JobStatus.COMPLETED if req.status == "completed" else JobStatus.PROCESSING
+            )
+            await whatsapp_client.send_notification(whatsapp_msg)
+            
+        return {"status": "success", "message": "Global system architecture updated."}
+    except Exception as e:
+        logger.error(f"Failed internal webhook update: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest):
@@ -168,6 +210,8 @@ class ProfileUpdateRequest(BaseModel):
     phone: str
     fullName: str
     twilioNumber: str
+    dob: str = ""
+    cscId: str = ""
 
 @app.get("/user/{phone}")
 async def get_user_profile(phone: str):
@@ -195,6 +239,8 @@ async def update_user_profile(req: ProfileUpdateRequest):
                     'phone': req.phone,
                     'full_name': req.fullName,
                     'twilio_number': req.twilioNumber,
+                    'dob': req.dob,
+                    'csc_id': req.cscId,
                     'created_at': user_data.get('created_at', datetime.utcnow().isoformat()),
                     'updated_at': datetime.utcnow().isoformat()
                 }

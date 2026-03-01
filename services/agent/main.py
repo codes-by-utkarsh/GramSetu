@@ -111,6 +111,22 @@ async def execute_task(
             task_id=task.task_id,
             status=result.status
         )
+
+        # Notify Orchestrator of completion to trigger Twilio & DynamoDB
+        import requests
+        try:
+            phone_to_notify = task.form_data.get('citizen_phone') or ''
+            
+            payload = {
+                "job_id": task.task_id,
+                "status": "completed" if result.status == JobStatus.COMPLETED else "failed",
+                "message": result.acknowledgement_number or result.error_message or "Task processed",
+                "citizen_phone": phone_to_notify
+            }
+            requests.post("http://localhost:8000/internal/jobs/update-status", json=payload, timeout=2)
+            logger.info("Successfully pushed task completion to Orchestrator Core")
+        except Exception as orchestrator_error:
+            logger.warning(f"Could not reach orchestrator for completion sync: {orchestrator_error}")
         
         return result
         
