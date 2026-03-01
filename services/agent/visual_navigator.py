@@ -26,49 +26,36 @@ class VisualNavigator:
     Navigates websites using visual understanding, not DOM selectors
     """
     
-    VISION_PROMPT = """You are an expert Indian government portal automation agent.
-You see a REAL screenshot of a LIVE government website.
-
-**PORTAL CONTEXT:**
-{portal_context}
-
-**EXPECTED WORKFLOW:**
-{workflow_steps}
-
-**YOUR CURRENT TASK:** {task_description}
-**FORM DATA AVAILABLE:** {form_data}
-**CURRENT STEP NUMBER:** {step_num}
-
-Look at the screenshot carefully and decide the SINGLE BEST NEXT ACTION.
-
-Available actions:
-- **click**: Click an element. Provide x, y pixel coordinates (from the screenshot).
-- **type**: Click a field and type text. Provide x, y coordinates AND text to type.
-- **scroll**: Scroll the page. Provide direction: "down" or "up".
-- **wait**: Wait for page load / animation to finish.
-- **select**: Select from a dropdown. Provide x, y and the option text.
-- **solve_captcha**: A CAPTCHA is visible and needs solving. Describe the captcha region.
-- **complete**: The task is done. Provide all extracted_data as a JSON dict.
-- **error**: Something unexpected happened. Provide a clear error message.
-
-IMPORTANT RULES:
-1. Coordinates must be exact pixel positions on a 1280×720 screenshot.
-2. For dropdowns, first click the dropdown, then click the option.
-3. After clicking a button, always follow up with "wait" if content may be loading.
-4. If you see a CAPTCHA (distorted text image), use "solve_captcha" action.
-5. If the task is to check status and you can see the result, use "complete" immediately.
-6. Only include "extracted_data" when action is "complete".
-
-Respond ONLY with valid JSON (no markdown, no explanation):
-{{
-  "action": "click",
-  "coordinates": {{"x": 450, "y": 320}},
-  "text": "optional - only for type action",
-  "option_text": "optional - only for select action",
-  "reasoning": "short explanation of what you see and why this action",
-  "confidence": 0.92,
-  "extracted_data": {{}}
-}}
+    VISION_PROMPT = (
+        "You are an expert Indian government portal automation agent.\n"
+        "You see a REAL screenshot of a LIVE government website.\n\n"
+        "PORTAL CONTEXT:\n{portal_context}\n\n"
+        "EXPECTED WORKFLOW:\n{workflow_steps}\n\n"
+        "YOUR CURRENT TASK: {task_description}\n"
+        "FORM DATA AVAILABLE: {form_data}\n"
+        "CURRENT STEP NUMBER: {step_num}\n\n"
+        "Look at the screenshot carefully and decide the SINGLE BEST NEXT ACTION.\n\n"
+        "Available actions:\n"
+        "- click: Click an element. Provide x, y pixel coordinates.\n"
+        "- type: Click a field and type text. Provide x, y coords AND text.\n"
+        "- scroll: Scroll the page. Provide direction: 'down' or 'up'.\n"
+        "- select: Select from a dropdown. Provide x, y and option_text.\n"
+        "- wait: Wait for page load or animation to finish.\n"
+        "- solve_captcha: A CAPTCHA is visible. Describe captcha_region coords.\n"
+        "- complete: Task is DONE. Provide all extracted_data as a JSON object.\n"
+        "- error: Something unexpected happened. Provide error reasoning.\n\n"
+        "IMPORTANT RULES:\n"
+        "1. Coordinates must be exact pixel positions on a 1280x720 screenshot.\n"
+        "2. For dropdowns: first click the dropdown, then click the option.\n"
+        "3. After clicking a button, follow up with 'wait' if content may load.\n"
+        "4. If you see a CAPTCHA (distorted text image), use 'solve_captcha'.\n"
+        "5. If task is to check status and you see results, use 'complete' immediately.\n"
+        "6. Only include 'extracted_data' when action is 'complete'.\n\n"
+        "Respond ONLY with valid JSON (no markdown, no extra text):\n"
+        '{"action": "click", "coordinates": {"x": 450, "y": 320}, '
+        '"text": null, "option_text": null, '
+        '"reasoning": "explanation", "confidence": 0.92, "extracted_data": {}}'
+    )
     
     def __init__(self):
         self.browser: Optional[Browser] = None
@@ -179,68 +166,120 @@ Respond ONLY with valid JSON (no markdown, no explanation):
                 with open(screenshot_path, "wb") as f:
                     f.write(screenshot_bytes)
                 
-                # Get next action from vision model
+                # Get next action from vision model — pass full portal context
+                portal_context = driver.get_vision_context() if hasattr(driver, 'get_vision_context') else ""
+                workflow_steps = "\n".join(driver.get_workflow()) if hasattr(driver, 'get_workflow') else ""
+                
                 action = await self._get_next_action(
                     screenshot_bytes,
-                    task_description=f"{task.action} for {task.scheme}",
+                    task_description=f"{task.action} for {task.scheme} scheme",
                     form_data=task.form_data,
-                    step_num=step_num
+                    step_num=step_num,
+                    portal_context=portal_context,
+                    workflow_steps=workflow_steps,
                 )
                 
                 latest_screenshot = str(screenshot_path.absolute())
-                logger.info(f"Step {step_num}: {action.get('action')} - {action.get('reasoning', '')} | Saved: {latest_screenshot}")
+                logger.info(
+                    f"Step {step_num}: [{action.get('action')}] "
+                    f"{action.get('reasoning', '')[:80]} "
+                    f"(confidence={action.get('confidence', 0):.2f})"
+                )
                 
                 # Execute action
-                if action['action'] == 'complete':
-                    # Task complete!
+                action_type = action.get('action', 'wait')
+                
+                if action_type == 'complete':
+                    extracted = action.get('extracted_data', {})
+                    ref_num = (
+                        extracted.get('reference_number') or
+                        extracted.get('uan') or
+                        extracted.get('registration_number') or
+                        extracted.get('acknowledgement')
+                    )
                     return AgentResult(
                         task_id=task.task_id,
                         status=JobStatus.COMPLETED,
-                        result_data=action.get('extracted_data', {}),
-                        acknowledgement_number=action.get('extracted_data', {}).get('reference_number'),
+                        result_data=extracted,
+                        acknowledgement_number=ref_num,
                         steps_completed=steps_completed,
                         screenshot_url=latest_screenshot
                     )
                 
-                elif action['action'] == 'click':
+                elif action_type == 'error':
+                    logger.error(f"Agent detected error: {action.get('reasoning')}")
+                    return AgentResult(
+                        task_id=task.task_id,
+                        status=JobStatus.FAILED,
+                        error_message=action.get('reasoning', 'Unknown agent error'),
+                        steps_completed=steps_completed,
+                        screenshot_url=latest_screenshot
+                    )
+                
+                elif action_type == 'click':
                     coords = action.get('coordinates', {})
                     x, y = coords.get('x', 640), coords.get('y', 360)
                     await page.mouse.click(x, y)
-                    await page.wait_for_timeout(1000)
-                    steps_completed.append(f"Clicked at ({x}, {y})")
+                    await page.wait_for_timeout(1200)  # Wait for any transition
+                    steps_completed.append(f"Clicked at ({x}, {y}) — {action.get('reasoning', '')[:40]}")
                 
-                elif action['action'] == 'type':
+                elif action_type == 'type':
                     coords = action.get('coordinates', {})
                     x, y = coords.get('x', 640), coords.get('y', 360)
                     text = action.get('text', '')
                     await page.mouse.click(x, y)
-                    await page.keyboard.type(text, delay=50)  # Human-like typing
-                    steps_completed.append(f"Typed: {text[:20]}...")
+                    await page.wait_for_timeout(300)
+                    # Clear field first
+                    await page.keyboard.press('Control+a')
+                    await page.keyboard.type(text, delay=60)  # Human-like typing speed
+                    steps_completed.append(f"Typed '{text[:25]}' at ({x},{y})")
                 
-                elif action['action'] == 'scroll':
+                elif action_type == 'select':
+                    # Select from a dropdown using keyboard or click-option
+                    coords = action.get('coordinates', {})
+                    x, y = coords.get('x', 640), coords.get('y', 360)
+                    option_text = action.get('option_text', '')
+                    try:
+                        # Try native select element first
+                        await page.select_option(
+                            f'select:near(:root)',
+                            label=option_text,
+                        )
+                    except Exception:
+                        # Fallback: click dropdown then click option
+                        await page.mouse.click(x, y)
+                        await page.wait_for_timeout(600)
+                        await page.get_by_text(option_text, exact=False).first.click()
+                    steps_completed.append(f"Selected '{option_text}'")
+                
+                elif action_type == 'scroll':
                     direction = action.get('direction', 'down')
-                    await page.mouse.wheel(0, 300 if direction == 'down' else -300)
+                    await page.mouse.wheel(0, 400 if direction == 'down' else -400)
+                    await page.wait_for_timeout(500)
                     steps_completed.append(f"Scrolled {direction}")
                 
-                elif action['action'] == 'wait':
-                    await page.wait_for_timeout(2000)
+                elif action_type == 'wait':
+                    await page.wait_for_timeout(2500)
                     steps_completed.append("Waited for page load")
                 
-                elif action['action'] == 'solve_captcha':
-                    # CAPTCHA detected
-                    captcha_text = await self._solve_captcha(screenshot_bytes, action.get('captcha_region'))
+                elif action_type == 'solve_captcha':
+                    # CAPTCHA detected — use vision to solve it
+                    captcha_text = await self._solve_captcha(
+                        screenshot_bytes, action.get('captcha_region')
+                    )
                     if captcha_text:
-                        # Type CAPTCHA
                         coords = action.get('coordinates', {})
                         x, y = coords.get('x', 640), coords.get('y', 360)
                         await page.mouse.click(x, y)
+                        await page.wait_for_timeout(200)
                         await page.keyboard.type(captcha_text)
-                        steps_completed.append(f"Solved CAPTCHA: {captcha_text}")
+                        steps_completed.append(f"Solved CAPTCHA: '{captcha_text}'")
                     else:
-                        logger.warning("CAPTCHA solving failed")
+                        logger.warning("CAPTCHA solving returned empty — waiting")
+                        await page.wait_for_timeout(2000)
                 
-                # Small delay between steps
-                await asyncio.sleep(0.5)
+                # Small pause between steps (anti-bot)
+                await asyncio.sleep(0.8)
             
             # Max steps reached
             return AgentResult(
@@ -311,40 +350,49 @@ Respond ONLY with valid JSON (no markdown, no explanation):
         screenshot_bytes: bytes,
         task_description: str,
         form_data: Dict,
-        step_num: int
+        step_num: int,
+        portal_context: str = "",
+        workflow_steps: str = "",
     ) -> Dict[str, Any]:
         """
-        Use multimodal LLM to determine next action
+        Use AWS Bedrock Claude (vision) to decide the next action on the page.
         """
         if not self._use_bedrock:
-            # Fallback: simple rule-based navigation
             return {"action": "wait", "reasoning": "No vision model available, waiting..."}
         
         try:
-            # Encode screenshot
             image_base64 = base64.b64encode(screenshot_bytes).decode()
             
-            # Build prompt
-            prompt = self.VISION_PROMPT.format(task_description=task_description)
-            prompt += f"\n\nForm data to fill: {json.dumps(form_data)}"
-            prompt += f"\n\nCurrent step: {step_num}"
+            # Build fully-contextualized prompt
+            prompt = self.VISION_PROMPT.format(
+                portal_context=portal_context or "No specific context provided.",
+                workflow_steps=workflow_steps or "Navigate and complete the task.",
+                task_description=task_description,
+                form_data=json.dumps(form_data, ensure_ascii=False),
+                step_num=step_num,
+            )
             
-            content = await self._call_vision_bedrock(image_base64, prompt, max_tokens=500)
+            content = await self._call_vision_bedrock(image_base64, prompt, max_tokens=600)
             
-            # Extract JSON from response (handle markdown code blocks)
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+            # Strip markdown code fences if model wrapped response
+            content = content.strip()
+            if content.startswith("```json"):
+                content = content[7:].split("```")[0].strip()
+            elif content.startswith("```"):
+                content = content[3:].split("```")[0].strip()
             
             action = json.loads(content)
+            # Ensure required fields
+            action.setdefault("confidence", 0.5)
+            action.setdefault("reasoning", "")
+            action.setdefault("extracted_data", {})
             return action
             
         except json.JSONDecodeError as e:
             logger.warning(f"Vision model returned non-JSON: {e}")
-            return {"action": "wait", "reasoning": "Could not parse vision response, waiting"}
+            return {"action": "wait", "reasoning": "Could not parse vision response"}
         except Exception as e:
-            logger.error(f"Vision model failed: {str(e)}")
+            logger.error(f"Vision model call failed: {str(e)}")
             return {"action": "wait", "reasoning": f"Error: {str(e)}"}
     
     async def _solve_captcha(self, screenshot_bytes: bytes, region: Optional[Dict] = None) -> Optional[str]:
