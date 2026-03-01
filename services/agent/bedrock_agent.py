@@ -5,6 +5,9 @@ Each driver knows the URL and expected workflow
 from typing import Dict, Any
 from shared.schemas import SchemeType
 from shared.logging_config import logger
+from shared.config import get_settings
+
+settings = get_settings()
 
 
 class PortalDriver:
@@ -29,6 +32,8 @@ class PMKisanDriver(PortalDriver):
         super().__init__(SchemeType.PM_KISAN)
     
     def get_url(self) -> str:
+        if settings.environment == "development":
+            return "https://gramsetu-mock-portals.s3.ap-south-1.amazonaws.com/pmkisan/index.html"
         return "https://pmkisan.gov.in/BeneficiaryStatus.aspx"
     
     def get_workflow(self) -> list[str]:
@@ -50,6 +55,8 @@ class EShramDriver(PortalDriver):
         super().__init__(SchemeType.E_SHRAM)
     
     def get_url(self) -> str:
+        if settings.environment == "development":
+            return "https://gramsetu-mock-portals.s3.ap-south-1.amazonaws.com/eshram/index.html"
         return "https://eshram.gov.in/user/register"
     
     def get_workflow(self) -> list[str]:

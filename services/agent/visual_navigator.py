@@ -269,13 +269,91 @@ If you see an error or session timeout, indicate that."""
         """
         Solve CAPTCHA using vision model
         """
-        # TODO: Implement CAPTCHA-specific vision prompt
-        logger.info("CAPTCHA solving not yet implemented")
-        return None
+        if not USE_ANTHROPIC:
+            return None
+            
+        try:
+            image_base64 = base64.b64encode(screenshot_bytes).decode()
+            
+            prompt = "You are a CAPTCHA solving assistant. Look at the image provided. Identify the CAPTCHA text or math problem within the image and provide ONLY the solved text or number as your response. Do not include any explanations or extra formatting. Just the final answer."
+            
+            if region:
+                prompt += f" Focus on the region around coordinates (x:{region.get('x')}, y:{region.get('y')})."
+                
+            response = await self.anthropic.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=20,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": image_base64
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            )
+            
+            captcha_answer = response.content[0].text.strip()
+            logger.info(f"CAPTCHA solved by vision: {captcha_answer}")
+            return captcha_answer
+            
+        except Exception as e:
+            logger.error(f"Failed to solve CAPTCHA: {str(e)}")
+            return None
     
     async def _detect_error(self, screenshot_bytes: bytes) -> bool:
         """
         Detect if page shows an error
         """
-        # TODO: Use vision model to detect error messages
-        return False
+        if not USE_ANTHROPIC:
+            return False
+            
+        try:
+            image_base64 = base64.b64encode(screenshot_bytes).decode()
+            
+            prompt = "Analyze this page screenshot. Does it contain a prominent error message, access denied warning, or a critical failure notification (e.g. 500 error, 'service unavailable', red alert banner)? Respond with ONLY 'YES' or 'NO'."
+            
+            response = await self.anthropic.messages.create(
+                model="claude-3-5-sonnet-20241022",
+                max_tokens=10,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": image_base64
+                                }
+                            },
+                            {
+                                "type": "text",
+                                "text": prompt
+                            }
+                        ]
+                    }
+                ]
+            )
+            
+            answer = response.content[0].text.strip().upper()
+            has_error = "YES" in answer
+            if has_error:
+                logger.warning("Agent detected an error on the page via vision model.")
+            return has_error
+            
+        except Exception as e:
+            logger.error(f"Failed to detect error via vision: {str(e)}")
+            return False

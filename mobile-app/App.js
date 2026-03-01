@@ -281,7 +281,115 @@ function LanguageSelectionScreen({ navigation }) {
 }
 
 // ==========================================
-// 4. Auth Screen (WhatsApp + Password)
+// 4a. Sign Up Screen
+// ==========================================
+function SignUpScreen({ navigation }) {
+    const t = useTranslation();
+    const [whatsapp, setWhatsapp] = useState('');
+    const [password, setPassword] = useState('');
+    const [fullName, setFullName] = useState('');
+    const [twilioNumber, setTwilioNumber] = useState('');
+    const [loading, setLoading] = useState(false);
+
+    const handleSignUp = async () => {
+        if (!whatsapp || !password || !fullName || !twilioNumber) {
+            Alert.alert('Error', t.errorRequired);
+            return;
+        }
+
+        setLoading(true);
+        try {
+            const response = await fetch('http://localhost:8000/auth/signup', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone: whatsapp, password, fullName, twilioNumber, cscId: '' })
+            });
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.detail || 'Sign Up Failed');
+            }
+
+            setLoading(false);
+            // After successful signup, they need OTP to verify
+            navigation.navigate('OTP', { whatsapp, password, twilioNumber, isNewUser: true, fullName });
+
+        } catch (err) {
+            setLoading(false);
+            Alert.alert('Sign Up Error', err.message);
+        }
+    };
+
+    return (
+        <GradientBackground>
+            <View style={[styles.centerAll, { flex: 1, paddingVertical: 20 }]}>
+                <GramSetuLogo size={60} />
+                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
+                    <Card.Content>
+                        <Title style={styles.authTitle}>Sign Up for GramSetu</Title>
+                        <Paragraph style={styles.authSubtitle}>Create your VLE Profile</Paragraph>
+
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Full Name"
+                            placeholderTextColor="#888"
+                            value={fullName}
+                            onChangeText={setFullName}
+                        />
+                        <TextInput
+                            style={styles.input}
+                            placeholder={t.whatsappNum}
+                            placeholderTextColor="#888"
+                            keyboardType="phone-pad"
+                            value={whatsapp}
+                            onChangeText={setWhatsapp}
+                        />
+                        <TextInput
+                            style={styles.input}
+                            placeholder="+1 (Twilio Sender Number)"
+                            placeholderTextColor="#888"
+                            keyboardType="phone-pad"
+                            value={twilioNumber}
+                            onChangeText={setTwilioNumber}
+                        />
+                        <TextInput
+                            style={styles.input}
+                            placeholder={t.password}
+                            placeholderTextColor="#888"
+                            secureTextEntry
+                            value={password}
+                            onChangeText={setPassword}
+                        />
+
+                        <Button
+                            mode="contained"
+                            onPress={handleSignUp}
+                            style={styles.submitBtn}
+                            buttonColor={gramSetuTheme.colors.secondary}
+                            labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
+                            loading={loading}
+                            disabled={loading}
+                        >
+                            Sign Up & Request OTP
+                        </Button>
+
+                        <Button
+                            mode="text"
+                            onPress={() => navigation.navigate('Auth')}
+                            style={{ marginTop: 10 }}
+                            textColor={gramSetuTheme.colors.primary}
+                        >
+                            Already have an account? Login
+                        </Button>
+                    </Card.Content>
+                </Card>
+            </View>
+        </GradientBackground>
+    );
+}
+
+// ==========================================
+// 4b. Auth / Login Screen
 // ==========================================
 function AuthScreen({ navigation }) {
     const t = useTranslation();
@@ -297,11 +405,6 @@ function AuthScreen({ navigation }) {
 
         setLoading(true);
         try {
-            // SMART ROUTING (Mock Backend Check)
-            // We will assume any number exactly 10-digits long starting with 9 is an existing user
-            const isExistingUser = whatsapp.startsWith('9') && whatsapp.length === 10;
-
-            // Send the request to our real Python Backend to trigger Twilio WhatsApp OTP
             const response = await fetch('http://localhost:8000/auth/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -309,22 +412,16 @@ function AuthScreen({ navigation }) {
             });
 
             if (!response.ok) {
-                throw new Error('Failed to send WhatsApp OTP. Please ensure the Python backend is running.');
+                const error = await response.json();
+                throw new Error(error.detail || 'Login Failed');
             }
 
             setLoading(false);
-
-            if (isExistingUser) {
-                // Existing User -> Go straight to OTP Verification
-                navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
-            } else {
-                // New User -> Go to Profile Setup to grab Twilio credentials
-                navigation.navigate('NewUserSetup', { whatsapp, password });
-            }
+            navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
 
         } catch (err) {
             setLoading(false);
-            Alert.alert('Twilio Backend Error', err.message);
+            Alert.alert('Login Error', err.message);
         }
     };
 
@@ -366,63 +463,14 @@ function AuthScreen({ navigation }) {
                         >
                             {t.continue}
                         </Button>
-                    </Card.Content>
-                </Card>
-            </View>
-        </GradientBackground>
-    );
-}
-
-// ==========================================
-// 4b. New User Setup Screen
-// ==========================================
-function NewUserSetupScreen({ route, navigation }) {
-    const t = useTranslation();
-    const { whatsapp, password } = route.params;
-    const [twilioNumber, setTwilioNumber] = useState('');
-
-    const handleCompleteSetup = () => {
-        if (!twilioNumber) {
-            Alert.alert('Error', 'Please configure your CSC Twilio WhatsApp number.');
-            return;
-        }
-        // Now trigger OTP for the new user
-        navigation.navigate('OTP', { whatsapp, password, twilioNumber, isNewUser: true });
-    };
-
-    return (
-        <GradientBackground>
-            <View style={[styles.centerAll, { flex: 1 }]}>
-                <Icon name="cog-outline" size={70} color={gramSetuTheme.colors.primary} style={{ marginBottom: 15 }} />
-
-                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
-                    <Card.Content>
-                        <Title style={styles.authTitle}>CSC Setup</Title>
-                        <Paragraph style={[styles.authSubtitle, { marginBottom: 15 }]}>
-                            Looks like you are a new VLE. We just need your Twilio API Sender Number to connect your agent.
-                        </Paragraph>
-
-                        <TextInput
-                            style={styles.input}
-                            placeholder="+1 (WhatsApp Sender Number)"
-                            placeholderTextColor="#888"
-                            keyboardType="phone-pad"
-                            value={twilioNumber}
-                            onChangeText={setTwilioNumber}
-                        />
 
                         <Button
-                            mode="contained"
-                            onPress={handleCompleteSetup}
-                            style={styles.submitBtn}
-                            buttonColor={gramSetuTheme.colors.secondary}
-                            labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
+                            mode="text"
+                            onPress={() => navigation.navigate('SignUp')}
+                            style={{ marginTop: 10 }}
+                            textColor={gramSetuTheme.colors.secondary}
                         >
-                            Register & Request OTP
-                        </Button>
-
-                        <Button mode="text" onPress={() => navigation.goBack()} textColor="#666">
-                            Cancel
+                            New VLE? Create an Account
                         </Button>
                     </Card.Content>
                 </Card>
@@ -436,7 +484,7 @@ function NewUserSetupScreen({ route, navigation }) {
 // ==========================================
 function OtpScreen({ route, navigation }) {
     const t = useTranslation();
-    const { whatsapp, password, isNewUser, twilioNumber } = route.params;
+    const { whatsapp, password, isNewUser, twilioNumber, fullName } = route.params;
     const [otp, setOtp] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -456,7 +504,8 @@ function OtpScreen({ route, navigation }) {
                     phone: whatsapp,
                     otp,
                     is_new_user: isNewUser || false,
-                    twilio_number: twilioNumber || ""
+                    twilio_number: twilioNumber || "",
+                    fullName: fullName || ""
                 })
             });
 
@@ -1256,7 +1305,7 @@ export default function App() {
                         <Stack.Screen name="Splash" component={SplashScreen} />
                         <Stack.Screen name="LanguageSelection" component={LanguageSelectionScreen} />
                         <Stack.Screen name="Auth" component={AuthScreen} />
-                        <Stack.Screen name="NewUserSetup" component={NewUserSetupScreen} />
+                        <Stack.Screen name="SignUp" component={SignUpScreen} />
                         <Stack.Screen name="OTP" component={OtpScreen} />
                         <Stack.Screen name="Dashboard" component={DrawerNavigator} />
                         <Stack.Screen name="Scanner" component={ScannerScreen} />

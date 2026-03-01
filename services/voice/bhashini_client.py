@@ -217,5 +217,27 @@ class BhashiniClient:
     async def _sarvam_fallback(self, audio_bytes: bytes, language: str) -> str:
         """Fallback to Sarvam AI for ASR"""
         logger.info("Using Sarvam AI fallback for ASR")
-        # TODO: Implement Sarvam AI integration
-        raise NotImplementedError("Sarvam AI fallback not yet implemented")
+        if settings.demo_mode:
+            return "mujhe pm kisan scheme mein naya form bharna hai"
+        
+        try:
+            if not settings.sarvam_api_key:
+                raise ValueError("Sarvam API key not configured")
+                
+            form_data = {
+                "file": ("audio.wav", audio_bytes, "audio/wav")
+            }
+            
+            response = await self.client.post(
+                "https://api.sarvam.ai/speech-to-text",
+                headers={"api-subscription-key": settings.sarvam_api_key},
+                files=form_data
+            )
+            response.raise_for_status()
+            
+            result = response.json()
+            return result.get("transcript", "")
+            
+        except Exception as e:
+            logger.error(f"Sarvam AI fallback failed: {str(e)}")
+            raise

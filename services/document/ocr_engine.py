@@ -99,8 +99,31 @@ class OCREngine:
     
     async def _parse_pan(self, response: Dict) -> Tuple[Dict, Dict]:
         """Parse PAN card response"""
-        # TODO: Implement PAN parsing
-        return {}, {}
+        import re
+        extracted = {}
+        confidences = {}
+        
+        for block in response.get('Blocks', []):
+            if block['BlockType'] == 'LINE':
+                text = block['Text'].strip()
+                confidence = block['Confidence'] / 100
+                
+                # Check for PAN number (5 letters, 4 numbers, 1 letter)
+                if re.match(r'^[A-Z]{5}[0-9]{4}[A-Z]$', text):
+                    extracted['pan_number'] = text
+                    confidences['pan_number'] = confidence
+                # Check for DOB
+                elif re.search(r'\d{2}/\d{2}/\d{4}', text):
+                    extracted['dob'] = re.search(r'\d{2}/\d{2}/\d{4}', text).group()
+                    confidences['dob'] = confidence
+                # Avoid common boilerplate text when identifying name
+                elif len(text) > 4 and "INCOME TAX" not in text and "GOVT" not in text:
+                    if 'name' not in extracted:
+                        extracted['name'] = text
+                        confidences['name'] = confidence
+
+        logger.info(f"Extracted PAN fields: {list(extracted.keys())}")
+        return extracted, confidences
     
     async def _parse_generic(self, response: Dict) -> Tuple[Dict, Dict]:
         """Parse generic document"""

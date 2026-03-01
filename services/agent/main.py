@@ -2,6 +2,13 @@
 Member 2: Browser Agent Service
 Autonomous web navigation using AWS Bedrock Agents + Visual Navigation
 """
+import sys
+import asyncio
+
+# Fix Playwright asyncio error on Windows
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
 from fastapi import FastAPI, HTTPException, Depends, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Optional
