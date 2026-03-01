@@ -26,31 +26,49 @@ class VisualNavigator:
     Navigates websites using visual understanding, not DOM selectors
     """
     
-    VISION_PROMPT = """You are an expert web automation agent. You can see a screenshot of a webpage.
+    VISION_PROMPT = """You are an expert Indian government portal automation agent.
+You see a REAL screenshot of a LIVE government website.
 
-Your task: {task_description}
+**PORTAL CONTEXT:**
+{portal_context}
 
-Analyze the screenshot and provide the NEXT action to take.
+**EXPECTED WORKFLOW:**
+{workflow_steps}
+
+**YOUR CURRENT TASK:** {task_description}
+**FORM DATA AVAILABLE:** {form_data}
+**CURRENT STEP NUMBER:** {step_num}
+
+Look at the screenshot carefully and decide the SINGLE BEST NEXT ACTION.
 
 Available actions:
-- click: Click an element (provide x, y coordinates)
-- type: Type text into a field (provide x, y coordinates and text)
-- scroll: Scroll the page (provide direction: up/down)
-- wait: Wait for page to load
-- extract: Extract text from a specific region
-- complete: Task is complete (provide extracted data)
+- **click**: Click an element. Provide x, y pixel coordinates (from the screenshot).
+- **type**: Click a field and type text. Provide x, y coordinates AND text to type.
+- **scroll**: Scroll the page. Provide direction: "down" or "up".
+- **wait**: Wait for page load / animation to finish.
+- **select**: Select from a dropdown. Provide x, y and the option text.
+- **solve_captcha**: A CAPTCHA is visible and needs solving. Describe the captcha region.
+- **complete**: The task is done. Provide all extracted_data as a JSON dict.
+- **error**: Something unexpected happened. Provide a clear error message.
 
-Respond ONLY with valid JSON:
+IMPORTANT RULES:
+1. Coordinates must be exact pixel positions on a 1280×720 screenshot.
+2. For dropdowns, first click the dropdown, then click the option.
+3. After clicking a button, always follow up with "wait" if content may be loading.
+4. If you see a CAPTCHA (distorted text image), use "solve_captcha" action.
+5. If the task is to check status and you can see the result, use "complete" immediately.
+6. Only include "extracted_data" when action is "complete".
+
+Respond ONLY with valid JSON (no markdown, no explanation):
 {{
   "action": "click",
-  "coordinates": {{"x": 450, "y": 300}},
-  "text": "optional text to type",
-  "reasoning": "why this action",
-  "confidence": 0.95
+  "coordinates": {{"x": 450, "y": 320}},
+  "text": "optional - only for type action",
+  "option_text": "optional - only for select action",
+  "reasoning": "short explanation of what you see and why this action",
+  "confidence": 0.92,
+  "extracted_data": {{}}
 }}
-
-If you see a CAPTCHA, describe it and I'll solve it.
-If you see an error or session timeout, indicate that."""
     
     def __init__(self):
         self.browser: Optional[Browser] = None
