@@ -1,11 +1,16 @@
 """
-Member 4: Orchestrator Service
-Main API gateway, job queue management, WhatsApp integration
+GramSetu Orchestrator Service — API Gateway
+- Auth (signup / login / OTP)
+- Beneficiary management (per VLE, stored in DynamoDB)
+- Job queue + real-time WebSocket status updates
+- Human-in-the-loop input requests from agent
 """
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException, Depends, WebSocket
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-import uuid
+from pydantic import BaseModel
+from typing import Optional, Dict, Any, List
+import uuid, random, asyncio
 from datetime import datetime
 
 from shared.config import get_settings
@@ -14,11 +19,75 @@ from shared.schemas import (
     JobStatus, WhatsAppNotification
 )
 from shared.logging_config import setup_logging
-from pydantic import BaseModel
-import random
+from services.orchestrator.job_manager import JobManager
+from services.orchestrator.whatsapp_client import WhatsAppClient
 
-# In-memory OTP store for MVP (Phone Number -> OTP Code)
-OTP_STORE = {}
+settings = get_settings()
+logger = setup_logging("orchestrator")
+
+job_manager = JobManager()
+whatsapp_client = WhatsAppClient()
+
+# In-memory OTP store (TTL-like dict; fine for MVP)
+OTP_STORE: Dict[str, str] = {}
+
+# Active WebSocket connections per VLE phone
+WS_CONNECTIONS: Dict[str, List[WebSocket]] = {}
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Orchestrator starting up")
+    try:
+        await job_manager.initialize()
+    except Exception as e:
+        logger.warning(f"JobManager init warning: {e}")
+    try:
+        await whatsapp_client.initialize()
+    except Exception as e:
+        logger.warning(f"WhatsApp init warning: {e}")
+    yield
+    logger.info("Orchestrator shutting down")
+
+
+app = FastAPI(title="GramSetu Orchestrator", version="2.0.0", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ──────────────────────────────────────────────────────
+# Misc helper: push update to all connected VLE devices
+# ──────────────────────────────────────────────────────
+
+async def push_ws_update(vle_phone: str, payload: dict):
+    clients = WS_CONNECTIONS.get(vle_phone, [])
+    dead = []
+    for ws in clients:
+        try:
+            await ws.send_json(payload)
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        clients.remove(ws)
+
+
+# ──────────────────────────────────────────────────────
+# Health
+# ──────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health_check():
+    return {"status": "healthy", "service": "orchestrator"}
+
+
+# ──────────────────────────────────────────────────────
+# Auth — Signup / Login / Verify OTP
+# ──────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
     phone: str
@@ -38,229 +107,53 @@ class VerifyRequest(BaseModel):
     twilio_number: str = ""
     fullName: str = ""
 
-from services.orchestrator.job_manager import JobManager
-from services.orchestrator.whatsapp_client import WhatsAppClient
-
-# Initialize
-settings = get_settings()
-logger = setup_logging("orchestrator")
-
-# Service components
-job_manager = JobManager()
-whatsapp_client = WhatsAppClient()
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Lifespan context manager for startup/shutdown"""
-    logger.info("Orchestrator starting up")
-    try:
-        await job_manager.initialize()
-        logger.info("Job manager (DynamoDB) initialized")
-    except Exception as e:
-        logger.warning(f"Job manager init warning: {e}")
-    try:
-        await whatsapp_client.initialize()
-        logger.info("WhatsApp client (Twilio) initialized")
-    except Exception as e:
-        logger.warning(f"WhatsApp client init warning: {e}")
-    yield
-    logger.info("Orchestrator shutting down")
-
-
-app = FastAPI(title="GramSetu Orchestrator", version="1.0.0", lifespan=lifespan)
-
-# CORS - allow all origins for Expo web and mobile
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint"""
-    return {"status": "healthy", "service": "orchestrator"}
-
-
-@app.post("/jobs", response_model=JobResponse)
-async def create_job(job_request: JobRequest):
-    """
-    Create new job from VLE
-    
-    Flow:
-    1. Generate job ID
-    2. Validate consent
-    3. Enqueue voice processing
-    4. Enqueue document processing
-    5. Return job ID to VLE
-    """
-    try:
-        # Generate job ID
-        job_id = str(uuid.uuid4())
-        
-        logger.info(
-            "Creating job",
-            job_id=job_id,
-            vle_id=job_request.vle_id,
-            citizen=job_request.citizen_name
-        )
-        
-        # Validate consent
-        if not job_request.consent_recorded:
-            raise HTTPException(
-                status_code=400,
-                detail="Verbal consent must be recorded before processing"
-            )
-        
-        # Create job in manager
-        await job_manager.create_job(job_id, job_request)
-        
-        return JobResponse(
-            job_id=job_id,
-            status=JobStatus.QUEUED,
-            estimated_completion_seconds=60,
-            message=f"Job created for {job_request.citizen_name}. Processing started."
-        )
-        
-    except Exception as e:
-        logger.error(f"Job creation failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
-async def get_job_status(job_id: str):
-    """Get job status"""
-    try:
-        status = await job_manager.get_status(job_id)
-        if not status:
-            raise HTTPException(status_code=404, detail="Job not found")
-        return status
-    except Exception as e:
-        logger.error(f"Status retrieval failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-class JobUpdateWebhook(BaseModel):
-    job_id: str
-    status: str
-    message: str
-    citizen_phone: str = ""
-
-@app.post("/internal/jobs/update-status")
-async def update_job_status(req: JobUpdateWebhook):
-    """Internal Webhook mapping between Agent Completion and AWS DynamoDB/Twilio updates"""
-    try:
-        # 1. Update AWS DynamoDB state
-        job_data = await job_manager.get_status(req.job_id)
-        if job_data:
-            job_manager.jobs_table.update_item(
-                Key={'job_id': req.job_id},
-                UpdateExpression="set #st = :s, current_step = :m, updated_at = :t",
-                ExpressionAttributeValues={
-                    ':s': req.status,
-                    ':m': req.message,
-                    ':t': datetime.utcnow().isoformat()
-                },
-                ExpressionAttributeNames={"#st": "status"}
-            )
-            logger.info("DynamoDB Job Tracker synchronized", job_id=req.job_id, new_status=req.status)
-        else:
-            logger.warning("Job not found in DynamoDB on async update", job_id=req.job_id)
-
-        # 2. Trigger Twilio WhatsApp Notification
-        if req.citizen_phone and req.citizen_phone != "unknown":
-            whatsapp_msg = WhatsAppNotification(
-                job_id=req.job_id,
-                recipient_phone=req.citizen_phone,
-                message_text=f"GramSetu AI Update: Your application status is now *{req.status}*.\nDetails: {req.message}",
-                status=JobStatus.COMPLETED if req.status == "completed" else JobStatus.PROCESSING
-            )
-            await whatsapp_client.send_notification(whatsapp_msg)
-            
-        return {"status": "success", "message": "Global system architecture updated."}
-    except Exception as e:
-        logger.error(f"Failed internal webhook update: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.post("/auth/signup")
 async def auth_signup(req: SignupRequest):
-    """Registers a new user and sends OTP"""
-    try:
-        user = await job_manager.get_user(req.phone)
-        if user:
-            raise HTTPException(status_code=400, detail="User already exists")
-        
-        otp = str(random.randint(100000, 999999))
-        OTP_STORE[req.phone] = otp
-        
-        success = await whatsapp_client.send_otp(req.phone, otp)
-        
-        # Always return success even if Twilio fails - OTP is in OTP_STORE
-        # In dev mode, return OTP in response for easy testing
-        resp = {"status": "success", "message": "OTP generated for registration"}
-        if not success:
-            logger.warning(f"WhatsApp OTP delivery failed for {req.phone}, OTP stored in memory")
-            resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
-        if settings.environment == "development":
-            resp["dev_otp"] = otp  # Only in dev mode!
-        return resp
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Signup failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    user = await job_manager.get_user(req.phone)
+    if user:
+        raise HTTPException(status_code=400, detail="User already exists")
+    otp = str(random.randint(100000, 999999))
+    OTP_STORE[req.phone] = otp
+    success = await whatsapp_client.send_otp(req.phone, otp)
+    resp = {"status": "success", "message": "OTP sent for registration"}
+    if not success:
+        resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
+    if settings.environment == "development":
+        resp["dev_otp"] = otp
+    return resp
+
 
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest):
-    """Generates an OTP and sends it via Twilio WhatsApp"""
-    try:
-        user = await job_manager.get_user(req.phone)
-        if not user:
-            raise HTTPException(status_code=404, detail="User not found. Please sign up.")
-            
-        otp = str(random.randint(100000, 999999))
-        OTP_STORE[req.phone] = otp
-        
-        # In a real app, verify password hash from DB here
-        success = await whatsapp_client.send_otp(req.phone, otp)
-        
-        resp = {"status": "success", "message": "OTP generated for login"}
-        if not success:
-            logger.warning(f"WhatsApp OTP delivery failed for {req.phone}, OTP stored in memory")
-            resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
-        if settings.environment == "development":
-            resp["dev_otp"] = otp  # Only in dev mode!
-        return resp
-            
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Login failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    user = await job_manager.get_user(req.phone)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found. Please sign up.")
+    otp = str(random.randint(100000, 999999))
+    OTP_STORE[req.phone] = otp
+    success = await whatsapp_client.send_otp(req.phone, otp)
+    resp = {"status": "success", "message": "OTP generated for login"}
+    if not success:
+        resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
+    if settings.environment == "development":
+        resp["dev_otp"] = otp
+    return resp
+
 
 @app.post("/auth/verify")
 async def auth_verify(req: VerifyRequest):
-    """Verifies the OTP and registers user in DB if new"""
     stored_otp = OTP_STORE.get(req.phone)
-    
     if not stored_otp or stored_otp != req.otp:
         raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-        
-    try:
-        if req.is_new_user:
-            # Save user configuration securely to DynamoDB
-            await job_manager.create_user(req.phone, req.twilio_number, req.fullName)
-            
-        del OTP_STORE[req.phone]
-        return {"status": "success", "message": "Authenticated"}
-        
-    except Exception as e:
-        logger.error(f"Verification failed: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    if req.is_new_user:
+        await job_manager.create_user(req.phone, req.twilio_number, req.fullName)
+    del OTP_STORE[req.phone]
+    return {"status": "success", "message": "Authenticated"}
+
+
+# ──────────────────────────────────────────────────────
+# VLE Profile
+# ──────────────────────────────────────────────────────
 
 class ProfileUpdateRequest(BaseModel):
     phone: str
@@ -269,69 +162,280 @@ class ProfileUpdateRequest(BaseModel):
     dob: str = ""
     cscId: str = ""
 
+
 @app.get("/user/{phone}")
 async def get_user_profile(phone: str):
-    try:
-        user_data = await job_manager.get_user(phone)
-        if not user_data:
-            raise HTTPException(status_code=404, detail="User not found")
-        return {"status": "success", "data": user_data}
-    except Exception as e:
-        logger.error(f"Failed to fetch user profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    user_data = await job_manager.get_user(phone)
+    if not user_data:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "success", "data": user_data}
+
 
 @app.post("/user/update")
 async def update_user_profile(req: ProfileUpdateRequest):
-    try:
-        user_data = await job_manager.get_user(req.phone)
-        if not user_data:
-            # We must recreate the user
-            await job_manager.create_user(req.phone, req.twilioNumber, req.fullName)
-        else:
-            # Note: A real implementation would implement an update_user in job_manager
-            # but for MVP we can use put_item to overwrite.
-            job_manager.users_table.put_item(
-                Item={
-                    'phone': req.phone,
-                    'full_name': req.fullName,
-                    'twilio_number': req.twilioNumber,
-                    'dob': req.dob,
-                    'csc_id': req.cscId,
-                    'created_at': user_data.get('created_at', datetime.utcnow().isoformat()),
-                    'updated_at': datetime.utcnow().isoformat()
-                }
-            )
-        return {"status": "success", "message": "Profile updated successfully"}
-    except Exception as e:
-        logger.error(f"Failed to update user profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+    user = await job_manager.get_user(req.phone)
+    if not user:
+        await job_manager.create_user(req.phone, req.twilioNumber, req.fullName)
+    else:
+        job_manager.users_table.put_item(Item={
+            'phone': req.phone,
+            'full_name': req.fullName,
+            'twilio_number': req.twilioNumber,
+            'dob': req.dob,
+            'csc_id': req.cscId,
+            'created_at': user.get('created_at', datetime.utcnow().isoformat()),
+            'updated_at': datetime.utcnow().isoformat()
+        })
+    return {"status": "success", "message": "Profile updated successfully"}
 
 
-@app.websocket("/ws/{vle_id}")
-async def websocket_endpoint(websocket: WebSocket, vle_id: str):
+# ──────────────────────────────────────────────────────
+# Beneficiary management
+# ──────────────────────────────────────────────────────
+
+class BeneficiaryCreateRequest(BaseModel):
+    vle_phone: str
+    name: str
+    phone: str = ""
+    aadhaar_last4: str = ""
+    dob: str = ""
+    gender: str = ""
+    address: str = ""
+    pan_number: str = ""
+    bank_account: str = ""
+    bank_ifsc: str = ""
+    beneficiary_id: str = ""  # optional: provide to update existing
+
+
+class BeneficiaryUpdateRequest(BaseModel):
+    vle_phone: str
+    beneficiary_id: str
+    updates: Dict[str, Any]
+
+
+@app.post("/beneficiaries")
+async def create_beneficiary(req: BeneficiaryCreateRequest):
+    data = req.dict()
+    vle_phone = data.pop("vle_phone")
+    bid = await job_manager.create_beneficiary(vle_phone, data)
+    return {"status": "success", "beneficiary_id": bid}
+
+
+@app.get("/beneficiaries/{vle_phone}")
+async def list_beneficiaries(vle_phone: str):
+    items = await job_manager.list_beneficiaries(vle_phone)
+    return {"status": "success", "data": items}
+
+
+@app.get("/beneficiaries/{vle_phone}/{beneficiary_id}")
+async def get_beneficiary(vle_phone: str, beneficiary_id: str):
+    item = await job_manager.get_beneficiary(vle_phone, beneficiary_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Beneficiary not found")
+    return {"status": "success", "data": item}
+
+
+@app.post("/beneficiaries/update")
+async def update_beneficiary(req: BeneficiaryUpdateRequest):
+    await job_manager.update_beneficiary(req.vle_phone, req.beneficiary_id, req.updates)
+    return {"status": "success"}
+
+
+# ──────────────────────────────────────────────────────
+# Jobs
+# ──────────────────────────────────────────────────────
+
+@app.post("/jobs", response_model=JobResponse)
+async def create_job(job_request: JobRequest):
+    job_id = str(uuid.uuid4())
+    if not job_request.consent_recorded:
+        raise HTTPException(status_code=400, detail="Verbal consent must be recorded first")
+    await job_manager.create_job(job_id, job_request)
+    return JobResponse(
+        job_id=job_id,
+        status=JobStatus.QUEUED,
+        estimated_completion_seconds=90,
+        message=f"Job created for {job_request.citizen_name}. Agent starting..."
+    )
+
+
+@app.get("/jobs/{job_id}", response_model=JobStatusResponse)
+async def get_job_status(job_id: str):
+    status = await job_manager.get_status(job_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return status
+
+
+@app.get("/jobs/{job_id}/log")
+async def get_job_log(job_id: str):
+    """Return the step-by-step log array for live display in app"""
+    raw = await job_manager.get_job_raw(job_id)
+    if not raw:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {
+        "job_id": job_id,
+        "status": raw.get("status"),
+        "current_step": raw.get("current_step"),
+        "progress_percentage": int(raw.get("progress_percentage", 0)),
+        "steps_log": raw.get("steps_log", []),
+        "result_data": raw.get("result_data")
+    }
+
+
+# ──────────────────────────────────────────────────────
+# Internal webhook from agent (updates job + notifies VLE)
+# ──────────────────────────────────────────────────────
+
+class JobUpdateWebhook(BaseModel):
+    job_id: str
+    status: str
+    step: str
+    progress: int = 0
+    citizen_phone: str = ""
+    result: Optional[Dict] = None
+    step_log_entry: Optional[str] = None
+    vle_phone: str = ""  # to route WebSocket push
+
+
+@app.post("/internal/jobs/update-status")
+async def update_job_status(req: JobUpdateWebhook):
+    await job_manager.update_job(
+        job_id=req.job_id,
+        status=req.status,
+        step=req.step,
+        progress=req.progress,
+        result=req.result,
+        step_log_entry=req.step_log_entry or req.step
+    )
+    # Push live update to VLE's WebSocket connection
+    if req.vle_phone:
+        await push_ws_update(req.vle_phone, {
+            "type": "job_update",
+            "job_id": req.job_id,
+            "status": req.status,
+            "step": req.step,
+            "progress": req.progress,
+        })
+    # If completed/failed, notify citizen via WhatsApp
+    if req.status in ("completed", "failed") and req.citizen_phone:
+        msg = (
+            f"✅ GramSetu: Your application has been *COMPLETED* successfully!"
+            if req.status == "completed"
+            else f"❌ GramSetu: Your application processing encountered an issue. Please visit your VLE again."
+        )
+        notification = WhatsAppNotification(
+            job_id=req.job_id,
+            recipient_phone=req.citizen_phone,
+            message_text=msg,
+            status=JobStatus.COMPLETED if req.status == "completed" else JobStatus.FAILED
+        )
+        await whatsapp_client.send_notification(notification)
+    return {"status": "success"}
+
+
+# ──────────────────────────────────────────────────────
+# Human-in-the-loop: agent asks VLE for more info
+# ──────────────────────────────────────────────────────
+
+class InputRequestCreate(BaseModel):
+    job_id: str
+    fields_needed: List[str]
+    screenshot_url: str = ""
+    message: str = ""
+    vle_phone: str = ""
+
+
+class InputAnswerSubmit(BaseModel):
+    request_id: str
+    answer: Dict[str, Any]
+
+
+@app.post("/agent/input-request")
+async def create_input_request(req: InputRequestCreate):
     """
-    WebSocket for real-time updates to VLE mobile app
+    Called by the agent service when a portal requires additional
+    information from the VLE (e.g., OTP, missing field, CAPTCHA override).
     """
+    request_id = await job_manager.create_input_request(
+        job_id=req.job_id,
+        fields_needed=req.fields_needed,
+        screenshot_url=req.screenshot_url,
+        message=req.message
+    )
+    # Update job status to waiting_for_input
+    await job_manager.update_job(
+        job_id=req.job_id,
+        status=JobStatus.WAITING_FOR_INPUT,
+        step=f"Waiting for VLE input: {', '.join(req.fields_needed)}",
+        progress=50
+    )
+    # Push to VLE's phone via WebSocket
+    if req.vle_phone:
+        await push_ws_update(req.vle_phone, {
+            "type": "input_required",
+            "job_id": req.job_id,
+            "request_id": request_id,
+            "fields_needed": req.fields_needed,
+            "screenshot_url": req.screenshot_url,
+            "message": req.message
+        })
+    return {"status": "success", "request_id": request_id}
+
+
+@app.get("/agent/input-request/{request_id}")
+async def get_input_request(request_id: str):
+    """Agent polls this endpoint waiting for VLE to provide answer."""
+    item = await job_manager.get_input_request(request_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Input request not found")
+    return item
+
+
+@app.post("/agent/input-answer")
+async def submit_input_answer(req: InputAnswerSubmit):
+    """VLE submits the answer. Agent will pick it up on its next poll."""
+    await job_manager.submit_input_answer(req.request_id, req.answer)
+    return {"status": "success"}
+
+
+# ──────────────────────────────────────────────────────
+# WebSocket — Real-time updates per VLE phone
+# ──────────────────────────────────────────────────────
+
+@app.websocket("/ws/{vle_phone}")
+async def websocket_endpoint(websocket: WebSocket, vle_phone: str):
     await websocket.accept()
-    logger.info(f"WebSocket connected: {vle_id}")
-    
+    if vle_phone not in WS_CONNECTIONS:
+        WS_CONNECTIONS[vle_phone] = []
+    WS_CONNECTIONS[vle_phone].append(websocket)
+    logger.info(f"WebSocket connected: {vle_phone}")
     try:
+        await websocket.send_json({"type": "connected", "vle_phone": vle_phone})
         while True:
-            # Keep connection alive and send updates
-            data = await websocket.receive_text()
-            # Echo for now (implement real-time job updates)
-            await websocket.send_text(f"Received: {data}")
+            # Keep connection alive — client sends pings
+            _ = await websocket.receive_text()
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket disconnected: {vle_phone}")
     except Exception as e:
-        logger.error(f"WebSocket error: {str(e)}")
+        logger.error(f"WebSocket error for {vle_phone}: {e}")
     finally:
-        logger.info(f"WebSocket disconnected: {vle_id}")
+        if vle_phone in WS_CONNECTIONS:
+            try:
+                WS_CONNECTIONS[vle_phone].remove(websocket)
+            except ValueError:
+                pass
 
+
+# ──────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "services.orchestrator.main:app",
         host=settings.api_host,
         port=settings.api_port,
-        reload=(settings.environment == "development")
+        reload=False
     )

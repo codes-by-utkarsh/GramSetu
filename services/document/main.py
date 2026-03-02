@@ -175,8 +175,8 @@ async def process_document(doc_input: DocumentInput):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "services.document.main:app",
         host=settings.api_host,
         port=8003,
-        reload=(settings.environment == "development")
+        reload=False
     )

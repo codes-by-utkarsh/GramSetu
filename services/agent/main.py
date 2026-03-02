@@ -18,7 +18,6 @@ from typing import Optional
 from shared.config import get_settings
 from shared.schemas import AgentTask, AgentResult, JobStatus
 from shared.logging_config import setup_logging
-from shared.redis_client import get_redis, RedisClient
 
 from services.agent.bedrock_agent import BedrockAgentController
 from services.agent.visual_navigator import VisualNavigator
@@ -92,7 +91,6 @@ async def health_check():
 async def execute_task(
     task: AgentTask,
     background_tasks: BackgroundTasks,
-    redis: RedisClient = Depends(get_redis)
 ):
     """
     Execute autonomous browser task
@@ -114,13 +112,6 @@ async def execute_task(
             action=task.action
         )
 
-        # Update status to processing
-        await redis.set_json(
-            f"task:{task.task_id}:status",
-            {"status": JobStatus.PROCESSING, "step": "Initializing browser"},
-            expire=3600
-        )
-
         # Check if browser is available
         if visual_navigator.browser is None:
             logger.warning("Browser not initialized, attempting to reinitialize...")
@@ -133,7 +124,9 @@ async def execute_task(
         result = await visual_navigator.execute(
             driver=driver,
             task=task,
-            session_state=task.session_state
+            session_state=task.session_state,
+            orchestrator_url="http://localhost:8000",
+            vle_phone=task.form_data.get('vle_phone', '')
         )
 
         # Save session for future use
@@ -178,22 +171,16 @@ async def execute_task(
 
 
 @app.get("/task-status/{task_id}")
-async def get_task_status(
-    task_id: str,
-    redis: RedisClient = Depends(get_redis)
-):
-    """Get real-time task status"""
-    status = await redis.get_json(f"task:{task_id}:status")
-    if not status:
-        raise HTTPException(status_code=404, detail="Task not found")
-    return status
+async def get_task_status(task_id: str):
+    """Get real-time task status - in-memory fallback"""
+    return {"task_id": task_id, "status": "unknown"}
 
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "services.agent.main:app",
         host=settings.api_host,
         port=8002,
-        reload=(settings.environment == "development")
+        reload=False
     )

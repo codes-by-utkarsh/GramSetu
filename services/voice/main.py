@@ -149,8 +149,8 @@ async def text_to_speech(text: str, language: str = "hi"):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
-        "main:app",
+        "services.voice.main:app",
         host=settings.api_host,
         port=8001,
-        reload=(settings.environment == "development")
+        reload=False
     )

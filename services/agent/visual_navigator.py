@@ -16,6 +16,7 @@ from pathlib import Path
 from shared.config import get_settings
 from shared.schemas import AgentTask, AgentResult, JobStatus
 from shared.logging_config import logger
+import requests as req_lib
 
 settings = get_settings()
 
@@ -42,6 +43,8 @@ class VisualNavigator:
         "- select: Select from a dropdown. Provide x, y and option_text.\n"
         "- wait: Wait for page load or animation to finish.\n"
         "- solve_captcha: A CAPTCHA is visible. Describe captcha_region coords.\n"
+        "- need_input: Portal requires info NOT in form_data (e.g. OTP, missing address). "
+        "Provide fields_needed as a list of field names the VLE must supply.\n"
         "- complete: Task is DONE. Provide all extracted_data as a JSON object.\n"
         "- error: Something unexpected happened. Provide error reasoning.\n\n"
         "IMPORTANT RULES:\n"
@@ -50,10 +53,11 @@ class VisualNavigator:
         "3. After clicking a button, follow up with 'wait' if content may load.\n"
         "4. If you see a CAPTCHA (distorted text image), use 'solve_captcha'.\n"
         "5. If task is to check status and you see results, use 'complete' immediately.\n"
-        "6. Only include 'extracted_data' when action is 'complete'.\n\n"
+        "6. If the portal asks for something not in form_data, use 'need_input' with fields_needed list.\n"
+        "7. Only include 'extracted_data' when action is 'complete'.\n\n"
         "Respond ONLY with valid JSON (no markdown, no extra text):\n"
         '{"action": "click", "coordinates": {"x": 450, "y": 320}, '
-        '"text": null, "option_text": null, '
+        '"text": null, "option_text": null, "fields_needed": [], '
         '"reasoning": "explanation", "confidence": 0.92, "extracted_data": {}}'
     )
     
@@ -108,11 +112,74 @@ class VisualNavigator:
         except Exception as e:
             logger.warning(f"Browser cleanup warning: {e}")
     
+    async def _push_step(self, orchestrator_url: str, task: AgentTask, step: str, progress: int,
+                          vle_phone: str = "", screenshot_url: str = ""):
+        """Push a step update to the orchestrator for live WebSocket relay to VLE app."""
+        try:
+            req_lib.post(
+                f"{orchestrator_url}/internal/jobs/update-status",
+                json={
+                    "job_id": task.task_id,
+                    "status": "processing",
+                    "step": step,
+                    "progress": progress,
+                    "step_log_entry": step,
+                    "vle_phone": vle_phone
+                },
+                timeout=3
+            )
+        except Exception as e:
+            logger.warning(f"Failed to push step update: {e}")
+
+    async def _request_vle_input(
+        self, orchestrator_url: str, task: AgentTask, fields_needed: list,
+        screenshot_url: str = "", message: str = "", vle_phone: str = ""
+    ) -> Optional[Dict]:
+        """
+        Block until VLE submits the required fields via the app.
+        Polls orchestrator GET /agent/input-request/{request_id} every 3 seconds.
+        Max wait: 5 minutes.
+        """
+        try:
+            resp = req_lib.post(
+                f"{orchestrator_url}/agent/input-request",
+                json={
+                    "job_id": task.task_id,
+                    "fields_needed": fields_needed,
+                    "screenshot_url": screenshot_url,
+                    "message": message,
+                    "vle_phone": vle_phone
+                },
+                timeout=5
+            )
+            request_id = resp.json().get("request_id")
+        except Exception as e:
+            logger.error(f"Failed to create input request: {e}")
+            return None
+
+        logger.info(f"Waiting for VLE input on request {request_id} (needs: {fields_needed})")
+        for _ in range(100):  # Poll for up to 5 minutes (100 x 3s)
+            await asyncio.sleep(3)
+            try:
+                poll = req_lib.get(
+                    f"{orchestrator_url}/agent/input-request/{request_id}",
+                    timeout=3
+                ).json()
+                if poll.get("status") == "answered":
+                    logger.info(f"VLE answered request {request_id}: {poll.get('answer')}")
+                    return poll.get("answer", {})
+            except Exception:
+                pass
+        logger.warning(f"VLE input timeout for request {request_id}")
+        return None
+
     async def execute(
         self,
         driver: Any,
         task: AgentTask,
-        session_state: Optional[Dict] = None
+        session_state: Optional[Dict] = None,
+        orchestrator_url: str = "http://localhost:8000",
+        vle_phone: str = ""
     ) -> AgentResult:
         """
         Execute task using visual navigation
@@ -180,6 +247,15 @@ class VisualNavigator:
                 )
                 
                 latest_screenshot = str(screenshot_path.absolute())
+
+                # Push live step update to orchestrator → VLE app WebSocket
+                progress = min(10 + step_num * 4, 90)
+                await self._push_step(
+                    orchestrator_url, task,
+                    f"Step {step_num+1}: Analysing page...",
+                    progress, vle_phone, latest_screenshot
+                )
+
                 logger.info(
                     f"Step {step_num}: [{action.get('action')}] "
                     f"{action.get('reasoning', '')[:80]} "
@@ -278,6 +354,34 @@ class VisualNavigator:
                         logger.warning("CAPTCHA solving returned empty — waiting")
                         await page.wait_for_timeout(2000)
                 
+                elif action_type == 'need_input':
+                    # Agent needs info from VLE — pause and wait
+                    fields = action.get('fields_needed', [])
+                    msg = action.get('reasoning', 'Portal requires additional information')
+                    logger.info(f"Agent requesting VLE input: {fields}")
+                    await self._push_step(
+                        orchestrator_url, task,
+                        f"⏳ Portal needs input: {', '.join(fields)}",
+                        55, vle_phone, latest_screenshot
+                    )
+                    answer = await self._request_vle_input(
+                        orchestrator_url, task, fields,
+                        screenshot_url=latest_screenshot,
+                        message=msg, vle_phone=vle_phone
+                    )
+                    if answer:
+                        # Merge answer into form_data so next vision step can use it
+                        task.form_data.update(answer)
+                        steps_completed.append(f"VLE provided: {list(answer.keys())}")
+                    else:
+                        return AgentResult(
+                            task_id=task.task_id,
+                            status=JobStatus.FAILED,
+                            error_message="VLE did not provide required information in time",
+                            steps_completed=steps_completed,
+                            screenshot_url=latest_screenshot
+                        )
+
                 # Small pause between steps (anti-bot)
                 await asyncio.sleep(0.8)
             
