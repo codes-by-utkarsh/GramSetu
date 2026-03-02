@@ -12,6 +12,19 @@ import * as FileSystem from 'expo-file-system';
 import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Picker } from '@react-native-picker/picker';
+import Constants from 'expo-constants';
+import { Platform } from 'react-native';
+
+const API_BASE = typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost'
+    ? `http://${window.location.hostname}:8000`
+    : Platform.OS === 'android'
+        ? 'http://10.0.2.2:8000'
+        : Constants.expoConfig?.hostUri
+            ? `http://${Constants.expoConfig.hostUri.split(':')[0]}:8000`
+            : 'http://localhost:8000';
+
+const VOICE_API = API_BASE.replace(':8000', ':8001');
+const AGENT_API = API_BASE.replace(':8000', ':8002');
 
 // ==========================================
 // 1. i18n Dictionary & Context Setup
@@ -299,7 +312,7 @@ function SignUpScreen({ navigation }) {
 
         setLoading(true);
         try {
-            const response = await fetch('http://localhost:8000/auth/signup', {
+            const response = await fetch(`${API_BASE}/auth/signup`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone: whatsapp, password, fullName, twilioNumber, cscId: '' })
@@ -405,7 +418,7 @@ function AuthScreen({ navigation }) {
 
         setLoading(true);
         try {
-            const response = await fetch('http://localhost:8000/auth/login', {
+            const response = await fetch(`${API_BASE}/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone: whatsapp, password })
@@ -497,7 +510,7 @@ function OtpScreen({ route, navigation }) {
         setLoading(true);
         try {
             // Verify against Real AWS Python Backend
-            const response = await fetch('http://localhost:8000/auth/verify', {
+            const response = await fetch(`${API_BASE}/auth/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -583,13 +596,6 @@ function DashboardScreen({ navigation }) {
     const [user, setUser] = useState(null);
     const [networkOnline, setNetworkOnline] = useState(true);
     const [transcriptModal, setTranscriptModal] = useState({ visible: false, text: '', confidence: 0, intent: '' });
-
-    // Dynamic API base URL - works on browser (localhost) and Expo Go (device IP)
-    const API_BASE = typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost'
-        ? `http://${window.location.hostname}:8000`
-        : 'http://localhost:8000';
-    const VOICE_API = API_BASE.replace(':8000', ':8001');
-    const AGENT_API = API_BASE.replace(':8000', ':8002');
 
     const [queuedJobs, setQueuedJobs] = useState([
         { id: '1', title: 'PM-Kisan Status', citizen: 'Ramesh Kumar', status: 'completed', time: '10:30 AM' },

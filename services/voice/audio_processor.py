@@ -6,7 +6,6 @@ import io
 import numpy as np
 import noisereduce as nr
 import soundfile as sf
-import soundfile as sf
 from typing import Optional
 from shared.config import get_settings
 from shared.logging_config import logger

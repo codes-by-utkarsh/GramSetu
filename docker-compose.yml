@@ -4,7 +4,7 @@ services:
   # ============================================
   # Infrastructure Services
   # ============================================
-  
+
   postgres:
     image: postgres:16-alpine
     container_name: gramsetu-postgres
@@ -18,7 +18,7 @@ services:
       - postgres_data:/var/lib/postgresql/data
       - ./infrastructure/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gramsetu_user}"]
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gramsetu_user}" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -34,7 +34,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -44,7 +44,7 @@ services:
   # ============================================
   # Member 1: Voice Service
   # ============================================
-  
+
   voice-service:
     build:
       context: .
@@ -63,7 +63,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/voice:/app
+      - ./services/voice:/app/services/voice
+      - ./shared:/app/shared
       - voice_models:/models
     networks:
       - gramsetu-network
@@ -72,7 +73,7 @@ services:
   # ============================================
   # Member 2: Agent Service
   # ============================================
-  
+
   agent-service:
     build:
       context: .
@@ -94,7 +95,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/agent:/app
+      - ./services/agent:/app/services/agent
+      - ./shared:/app/shared
       - browser_data:/browser-data
     networks:
       - gramsetu-network
@@ -105,7 +107,7 @@ services:
   # ============================================
   # Member 3: Document Service
   # ============================================
-  
+
   document-service:
     build:
       context: .
@@ -126,7 +128,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/document:/app
+      - ./services/document:/app/services/document
+      - ./shared:/app/shared
       - document_storage:/storage
     networks:
       - gramsetu-network
@@ -135,7 +138,7 @@ services:
   # ============================================
   # Member 4: Orchestrator Service
   # ============================================
-  
+
   orchestrator:
     build:
       context: .
@@ -162,7 +165,8 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/orchestrator:/app
+      - ./services/orchestrator:/app/services/orchestrator
+      - ./shared:/app/shared
     networks:
       - gramsetu-network
     restart: unless-stopped
@@ -170,7 +174,7 @@ services:
   # ============================================
   # Celery Worker (Background Jobs)
   # ============================================
-  
+
   celery-worker:
     build:
       context: .
@@ -190,15 +194,15 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./services/orchestrator:/app
+      - ./services/orchestrator:/app/services/orchestrator
+      - ./shared:/app/shared
     networks:
       - gramsetu-network
     restart: unless-stopped
-
   # ============================================
   # Monitoring (Optional for Hackathon)
   # ============================================
-  
+
   # redis-commander:
   #   image: rediscommander/redis-commander:latest
   #   container_name: gramsetu-redis-ui
@@ -217,6 +221,7 @@ volumes:
   voice_models:
   browser_data:
   document_storage:
+
 
 networks:
   gramsetu-network:
