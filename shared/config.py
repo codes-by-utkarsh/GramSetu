@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     jwt_expiration_hours: int = 24
     
     # CORS
-    cors_origins: str = "http://localhost:3000,http://localhost:19006,http://localhost:8081,http://localhost:8082,http://localhost:8083"
+    cors_origins: str = "*"
     
     # Privacy & Compliance
     data_retention_hours: int = 24
