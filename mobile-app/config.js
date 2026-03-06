@@ -7,8 +7,8 @@ import Constants from 'expo-constants';
 // 1. Change IS_PRODUCTION to true
 // 2. Set PRODUCTION_IP to your AWS EC2 Public IPv4 Address
 // =========================================================================
-export const IS_PRODUCTION = false; // <-- SET TO true BEFORE RUNNING `eas build`
-export const PRODUCTION_IP = "13.123.45.67"; // <-- REPLACE WITH YOUR EC2 IP
+export const IS_PRODUCTION = true; // <-- SET TO true BEFORE RUNNING `eas build`
+export const PRODUCTION_IP = "43.205.117.14"; // <-- REPLACE WITH YOUR EC2 IP
 
 const getBaseIp = () => {
     if (IS_PRODUCTION) return PRODUCTION_IP;
