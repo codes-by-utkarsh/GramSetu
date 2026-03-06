@@ -30,13 +30,19 @@ aadhaar_masker = AadhaarMasker()
 ocr_engine = OCREngine()
 document_verifier = DocumentVerifier()
 
-# Instantiate S3 Client (Serverless Blob)
-s3_client = boto3.client(
-    's3',
-    aws_access_key_id=settings.aws_access_key_id,
-    aws_secret_access_key=settings.aws_secret_access_key,
-    region_name=settings.aws_region
-)
+# S3 client — created lazily to avoid startup crashes on bad creds
+_s3_client = None
+
+def _get_s3_client():
+    global _s3_client
+    if _s3_client is None:
+        _s3_client = boto3.client(
+            's3',
+            aws_access_key_id=settings.aws_access_key_id,
+            aws_secret_access_key=settings.aws_secret_access_key,
+            region_name=settings.aws_region
+        )
+    return _s3_client
 
 
 @asynccontextmanager
@@ -136,11 +142,11 @@ async def process_document(doc_input: DocumentInput):
             upload_byte_arr = io.BytesIO()
             masked_image.save(upload_byte_arr, format='JPEG')
             upload_bytes = upload_byte_arr.getvalue()
-            
+
             s3_filename = f"secure_docs/{doc_input.vle_id}_{uuid.uuid4().hex[:8]}.jpg"
             bucket_name = settings.s3_bucket_name or "gramsetu-storage"
-            
-            s3_client.put_object(
+
+            _get_s3_client().put_object(
                 Bucket=bucket_name,
                 Key=s3_filename,
                 Body=upload_bytes,
@@ -150,7 +156,7 @@ async def process_document(doc_input: DocumentInput):
             masked_image_url = f"s3://{bucket_name}/{s3_filename}"
             logger.info("Masked Document safely uploaded to AWS S3 Bucket", url=masked_image_url)
         except Exception as e_s3:
-            logger.error(f"S3 Upload failed: {str(e_s3)}")
+            logger.error(f"S3 Upload failed (continuing without upload): {str(e_s3)}")
         
         logger.info(
             "Document processing complete",

@@ -129,7 +129,7 @@ class JobRequest(BaseModel):
     """Complete job request from VLE"""
     vle_id: str = Field(..., description="VLE identifier")
     citizen_name: str = Field(..., description="Beneficiary name")
-    citizen_phone: str = Field(..., description="Beneficiary phone")
+    citizen_phone: Optional[str] = Field("", description="Beneficiary phone")
     voice_input: Optional[VoiceInput] = None
     documents: List[DocumentInput] = Field(default_factory=list)
     consent_recorded: bool = Field(False, description="Verbal consent obtained")
@@ -149,7 +149,7 @@ class JobStatusResponse(BaseModel):
     status: JobStatus
     progress_percentage: int = Field(0, ge=0, le=100)
     current_step: str = Field("", description="Human-readable current step")
-    result: Optional[AgentResult] = None
+    result: Optional[Dict[str, Any]] = None
     created_at: datetime
     updated_at: datetime
 

@@ -1,14 +1,14 @@
 """
-Intent classification and entity extraction using LLM
-Converts transcribed text to structured action + entities
+Intent classification and entity extraction using LLM or rule-based fallback.
+Converts transcribed text to structured action + entities.
 """
 import json
+import re
 from typing import Dict, Any
 from shared.config import get_settings
 from shared.schemas import IntentType, SchemeType
 from shared.logging_config import logger
 
-# Try Bedrock first, fallback to OpenAI
 try:
     import boto3
     USE_BEDROCK = True
@@ -25,158 +25,297 @@ settings = get_settings()
 
 
 class IntentClassifier:
-    """LLM-powered intent classification for government schemes"""
-    
-    SYSTEM_PROMPT = """You are an expert Indian Government Scheme intent classifier.
+    """LLM-powered intent classification for Indian government schemes"""
 
-Your task is to analyze user requests (spoken in rural Indian dialects, translated to English) and extract:
-1. **intent**: The action the user wants (check_status, apply_new, update_details, download_certificate, register)
-2. **scheme**: The government scheme (pm_kisan, e_shram, epfo, widow_pension, ration_card, ayushman_bharat)
-3. **entities**: Any mentioned data (name, aadhaar, mobile, account_number, etc.)
-4. **missing_info**: Required fields not yet provided
+    SYSTEM_PROMPT = """You are an expert Indian Government Scheme intent classifier for a VLE (Village Level Entrepreneur) app called GramSetu.
 
-Common patterns:
-- "Check PM-Kisan money" → intent: check_status, scheme: pm_kisan
-- "Register for e-Shram" → intent: register, scheme: e_shram
-- "My widow pension not coming" → intent: check_status, scheme: widow_pension
+A VLE speaks a query describing what a rural citizen needs. Your job is to:
+1. Identify the **scheme** from the list below (you MUST pick one — never return null).
+2. Identify the **intent** (action).
+3. Extract any **entities** mentioned.
+4. List **missing_info** fields still needed.
 
-Respond ONLY with valid JSON:
-{
-  "intent": "check_status",
-  "scheme": "pm_kisan",
-  "entities": {"name": "Ramesh Kumar"},
-  "missing_info": ["aadhaar_number", "mobile_number"],
-  "confidence": 0.95
-}
+SCHEME MAPPING (use EXACTLY these values):
+- pm_kisan       → PM Kisan, PM-Kisan, Kisan Samman Nidhi, farmer money, kisan paisa
+- e_shram        → e-Shram, eShram, labour card, shramik card, worker registration
+- epfo           → EPFO, PF, provident fund, EPF, employee provident
+- widow_pension  → widow pension, vidhwa pension, old age pension, vridha pension
+- ayushman_bharat → Ayushman, Ayushman Bharat, PMJAY, health card, ayushman card, golden card, pmjay
+- ration_card    → ration card, PDS, anaj, food card, rashan
 
-If unsure, set confidence < 0.7 and ask for clarification."""
-    
+INTENT OPTIONS (use EXACTLY these values):
+- check_status
+- apply_new
+- register
+- update_details
+- download_certificate
+
+RULES:
+- scheme MUST be one of: pm_kisan, e_shram, epfo, widow_pension, ayushman_bharat, ration_card
+- NEVER return null for scheme — pick the closest match
+- If genuinely unclear, pick check_status as intent and set confidence < 0.5
+- Respond ONLY with valid JSON, no extra text
+
+EXAMPLES:
+"Ayushman Card check" → {"intent":"check_status","scheme":"ayushman_bharat","entities":{},"missing_info":["aadhaar_number"],"confidence":0.95}
+"PM Kisan status check karna hai" → {"intent":"check_status","scheme":"pm_kisan","entities":{},"missing_info":["aadhaar_number","mobile_number"],"confidence":0.97}
+"e-Shram naya registration" → {"intent":"register","scheme":"e_shram","entities":{},"missing_info":["aadhaar_number","mobile_number"],"confidence":0.95}
+"Widow pension nahi aa rahi" → {"intent":"check_status","scheme":"widow_pension","entities":{},"missing_info":["aadhaar_number"],"confidence":0.90}
+"Ration card update" → {"intent":"update_details","scheme":"ration_card","entities":{},"missing_info":["aadhaar_number"],"confidence":0.90}
+"""
+
     def __init__(self):
-        if USE_BEDROCK:
-            self.bedrock = boto3.client(
-                'bedrock-runtime',
-                region_name=settings.aws_region,
-                aws_access_key_id=settings.aws_access_key_id,
-                aws_secret_access_key=settings.aws_secret_access_key
-            )
-            self.model_id = settings.bedrock_llm_model
-            logger.info("Using AWS Bedrock for intent classification")
-        elif USE_OPENAI and settings.openai_api_key:
-            self.openai = AsyncOpenAI(api_key=settings.openai_api_key)
+        self.bedrock = None          # boto3 bedrock-runtime client
+        self.bedrock_claude = False  # Whether Claude (Marketplace) is usable
+        self.openai_client = None
+
+        if USE_BEDROCK and settings.aws_access_key_id:
+            try:
+                self.bedrock = boto3.client(
+                    'bedrock-runtime',
+                    region_name=settings.aws_region,
+                    aws_access_key_id=settings.aws_access_key_id,
+                    aws_secret_access_key=settings.aws_secret_access_key,
+                )
+                self.model_id = settings.bedrock_llm_model
+                self.bedrock_claude = True
+                logger.info(f"AWS Bedrock client ready — primary model: {self.model_id}")
+            except Exception as e:
+                logger.warning(f"Bedrock init failed: {e}")
+
+        if self.bedrock is None and USE_OPENAI and settings.openai_api_key:
+            self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
             logger.info("Using OpenAI for intent classification")
-        else:
-            logger.warning("No LLM configured, using rule-based fallback")
-    
+
+        if self.bedrock is None and self.openai_client is None:
+            logger.warning("No LLM configured — using enhanced rule-based fallback")
+
     async def classify(self, text: str, context: str = None) -> Dict[str, Any]:
-        """
-        Classify intent and extract entities
-        
-        Args:
-            text: Transcribed/translated text
-            context: Optional session context
-        
-        Returns:
-            Dict with intent, scheme, entities, missing_info, confidence
-        """
+        """Classify intent + extract entities from user text."""
         try:
-            if USE_BEDROCK:
-                return await self._classify_bedrock(text)
-            elif USE_OPENAI:
-                return await self._classify_openai(text)
+            if self.bedrock and self.bedrock_claude:
+                # Try Claude (Anthropic via Marketplace) first
+                try:
+                    result = await self._classify_bedrock(text)
+                except Exception as e:
+                    if "AccessDeniedException" in str(e) or "INVALID_PAYMENT" in str(e):
+                        logger.warning("Claude access denied (payment instrument) — trying Amazon Titan")
+                        self.bedrock_claude = False  # Don't retry Claude
+                        result = await self._classify_titan(text)
+                    else:
+                        raise
+            elif self.bedrock:  # Claude disabled, Titan still available
+                result = await self._classify_titan(text)
+            elif self.openai_client:
+                result = await self._classify_openai(text)
             else:
-                return self._classify_rules(text)
+                result = self._classify_rules(text)
+
+            # Safety: ensure scheme is never null
+            if not result.get("scheme"):
+                logger.warning(f"LLM returned null scheme for: '{text}' — applying rule fallback")
+                rule_result = self._classify_rules(text)
+                result["scheme"] = rule_result.get("scheme") or SchemeType.PM_KISAN
+                result["confidence"] = min(result.get("confidence", 0.6), 0.7)
+
+            # Validate enum values
+            valid_schemes = {s.value for s in SchemeType}
+            valid_intents = {i.value for i in IntentType}
+            if result.get("scheme") not in valid_schemes:
+                result["scheme"] = self._classify_rules(text).get("scheme", SchemeType.PM_KISAN)
+            if result.get("intent") not in valid_intents:
+                result["intent"] = IntentType.CHECK_STATUS
+
+            return result
+
         except Exception as e:
-            logger.error(f"Intent classification failed: {str(e)}")
-            # Fallback to rule-based
+            logger.error(f"Intent classification failed: {e}")
             return self._classify_rules(text)
-    
+
     async def _classify_bedrock(self, text: str) -> Dict[str, Any]:
-        """Use AWS Bedrock (Claude) for classification"""
-        try:
+        """Use AWS Bedrock Claude for classification — proper system/user message split."""
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        def _invoke():
             payload = {
                 "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 500,
-                "temperature": 0.1,
+                "max_tokens": 300,
+                "temperature": 0.0,
+                "system": self.SYSTEM_PROMPT,
                 "messages": [
                     {
                         "role": "user",
-                        "content": f"{self.SYSTEM_PROMPT}\n\nUser request: {text}"
+                        "content": f"Classify this VLE request and respond with JSON only:\n\n\"{text}\""
                     }
                 ]
             }
-            
             response = self.bedrock.invoke_model(
                 modelId=self.model_id,
                 body=json.dumps(payload)
             )
-            
-            result = json.loads(response['body'].read())
-            content = result['content'][0]['text']
-            
-            # Parse JSON from response
-            parsed = json.loads(content)
-            logger.info(f"Bedrock classification: {parsed}")
-            return parsed
-            
-        except Exception as e:
-            logger.error(f"Bedrock classification failed: {str(e)}")
-            raise
-    
-    async def _classify_openai(self, text: str) -> Dict[str, Any]:
-        """Use OpenAI for classification"""
+            return json.loads(response['body'].read())
+
         try:
-            response = await self.openai.chat.completions.create(
-                model=settings.openai_model,
-                messages=[
-                    {"role": "system", "content": self.SYSTEM_PROMPT},
-                    {"role": "user", "content": f"User request: {text}"}
-                ],
-                temperature=0.1,
-                response_format={"type": "json_object"}
-            )
-            
-            content = response.choices[0].message.content
-            parsed = json.loads(content)
-            logger.info(f"OpenAI classification: {parsed}")
-            return parsed
-            
+            result = await loop.run_in_executor(None, _invoke)
         except Exception as e:
-            logger.error(f"OpenAI classification failed: {str(e)}")
+            err_str = str(e)
+            if "ResourceNotFoundException" in err_str or "have not been granted" in err_str or "use case details" in err_str:
+                logger.warning(
+                    f"Bedrock model '{self.model_id}' not yet enabled for this account. "
+                    "Go to AWS Console → Bedrock → Model Catalog and enable Claude 3 Haiku. "
+                    "Falling back to rule-based classification."
+                )
+                self.bedrock = None   # Disable for future calls so we don't keep retrying
+                return self._classify_rules(text)
             raise
-    
+
+        content = result['content'][0]['text'].strip()
+
+        # Strip markdown code fences if present
+        content = re.sub(r"^```(?:json)?\s*", "", content)
+        content = re.sub(r"\s*```$", "", content)
+
+        parsed = json.loads(content)
+        logger.info(f"Bedrock classification: scheme={parsed.get('scheme')}, intent={parsed.get('intent')}, conf={parsed.get('confidence')}")
+        return parsed
+
+    async def _classify_titan(self, text: str) -> Dict[str, Any]:
+        """
+        Use Amazon Titan Express for classification.
+        AWS-native model — NO Marketplace subscription required.
+        Works with just AWS credentials + credits.
+        Model: amazon.titan-text-express-v1
+        """
+        import asyncio
+        loop = asyncio.get_event_loop()
+
+        prompt = (
+            f"{self.SYSTEM_PROMPT}\n\n"
+            f"User: Classify this VLE request and respond with JSON only:\n\"{text}\"\n\nAssistant:"
+        )
+
+        def _invoke_titan():
+            payload = {
+                "inputText": prompt,
+                "textGenerationConfig": {
+                    "maxTokenCount": 300,
+                    "temperature": 0.0,
+                    "topP": 1,
+                    "stopSequences": []
+                }
+            }
+            response = self.bedrock.invoke_model(
+                modelId="amazon.titan-text-express-v1",
+                body=json.dumps(payload),
+                contentType="application/json",
+                accept="application/json"
+            )
+            return json.loads(response['body'].read())
+
+        try:
+            result = await loop.run_in_executor(None, _invoke_titan)
+            raw = result.get("results", [{}])[0].get("outputText", "").strip()
+
+            # Strip code fences
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```$", "", raw)
+
+            # Extract JSON object from response
+            match = re.search(r"\{.*\}", raw, re.DOTALL)
+            if not match:
+                raise ValueError(f"No JSON found in Titan response: {raw[:100]}")
+
+            parsed = json.loads(match.group())
+            logger.info(f"Titan classification: scheme={parsed.get('scheme')}, intent={parsed.get('intent')}")
+            return parsed
+
+        except Exception as e:
+            logger.warning(f"Titan classification failed: {e} — falling back to rules")
+            return self._classify_rules(text)
+
+    async def _classify_openai(self, text: str) -> Dict[str, Any]:
+        """Use OpenAI for classification."""
+        response = await self.openai_client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": f"Classify this VLE request:\n\n\"{text}\""}
+            ],
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            max_tokens=300
+        )
+        content = response.choices[0].message.content
+        parsed = json.loads(content)
+        logger.info(f"OpenAI classification: {parsed}")
+        return parsed
+
     def _classify_rules(self, text: str) -> Dict[str, Any]:
         """
-        Rule-based fallback classification
-        Simple keyword matching for demo purposes
+        Enhanced rule-based fallback — handles Hindi, Hinglish, English keywords.
+        Used when no LLM is available OR as scheme-null safety net.
         """
-        text_lower = text.lower()
-        
-        # Detect scheme
+        t = text.lower()
+
+        # ── Scheme detection ─────────────────────────────────────
+        SCHEME_KEYWORDS = {
+            SchemeType.AYUSHMAN_BHARAT: [
+                "ayushman", "aayushman", "pmjay", "health card", "golden card",
+                "ayushman card", "treatment", "hospital", "bimar"
+            ],
+            SchemeType.PM_KISAN: [
+                "pm kisan", "pm-kisan", "kisan", "farmer", "kisaan",
+                "samman nidhi", "kisan paisa", "farm"
+            ],
+            SchemeType.E_SHRAM: [
+                "e-shram", "eshram", "e shram", "shram", "labour", "labor",
+                "shramik", "worker card", "majdur", "mazdoor"
+            ],
+            SchemeType.EPFO: [
+                "epfo", "provident fund", "pf", "epf", "employee fund"
+            ],
+            SchemeType.WIDOW_PENSION: [
+                "widow", "vidhwa", "pension", "vridha", "old age", "budhapa"
+            ],
+            SchemeType.RATION_CARD: [
+                "ration", "rashan", "pds", "anaj", "food card", "ration card"
+            ],
+        }
+
         scheme = None
-        if any(kw in text_lower for kw in ["pm-kisan", "kisan", "farmer"]):
-            scheme = SchemeType.PM_KISAN
-        elif any(kw in text_lower for kw in ["e-shram", "eshram", "labor", "labour"]):
-            scheme = SchemeType.E_SHRAM
-        elif any(kw in text_lower for kw in ["epfo", "pf", "provident"]):
-            scheme = SchemeType.EPFO
-        elif any(kw in text_lower for kw in ["widow", "pension"]):
-            scheme = SchemeType.WIDOW_PENSION
-        
-        # Detect intent
-        intent = IntentType.CHECK_STATUS  # Default
-        if any(kw in text_lower for kw in ["apply", "register", "new"]):
+        for scheme_type, keywords in SCHEME_KEYWORDS.items():
+            if any(kw in t for kw in keywords):
+                scheme = scheme_type
+                break
+
+        # ── Intent detection ──────────────────────────────────────
+        intent = IntentType.CHECK_STATUS
+        if any(kw in t for kw in ["apply", "naya", "new", "nayi", "register", "registration", "banao", "bana"]):
             intent = IntentType.APPLY_NEW
-        elif any(kw in text_lower for kw in ["update", "change", "modify"]):
+        elif any(kw in t for kw in ["update", "change", "modify", "badlo", "sahi karo"]):
             intent = IntentType.UPDATE_DETAILS
-        elif any(kw in text_lower for kw in ["download", "certificate", "proof"]):
+        elif any(kw in t for kw in ["download", "certificate", "proof", "print", "nikalo"]):
             intent = IntentType.DOWNLOAD_CERTIFICATE
-        
-        logger.warning(f"Using rule-based classification: {intent}, {scheme}")
-        
+
+        # ── Missing info defaults per scheme ─────────────────────
+        missing: list = []
+        if scheme in (SchemeType.PM_KISAN, SchemeType.E_SHRAM, SchemeType.WIDOW_PENSION):
+            missing = ["aadhaar_number", "mobile_number"]
+        elif scheme == SchemeType.AYUSHMAN_BHARAT:
+            missing = ["aadhaar_number"]
+        elif scheme == SchemeType.EPFO:
+            missing = ["uan_number", "mobile_number"]
+        elif scheme == SchemeType.RATION_CARD:
+            missing = ["ration_card_number", "mobile_number"]
+
+        conf = 0.75 if scheme else 0.4
+        logger.info(f"Rule-based classification: scheme={scheme}, intent={intent}, conf={conf}")
+
         return {
             "intent": intent,
             "scheme": scheme,
             "entities": {},
-            "missing_info": ["aadhaar_number", "mobile_number"],
-            "confidence": 0.6  # Low confidence for rule-based
+            "missing_info": missing,
+            "confidence": conf
         }

@@ -153,11 +153,11 @@ GramSetu is architected into four tightly integrated feature streams, each owned
 
 **Key Components:**
 - Bhashini ASR integration with pre-processing (RNNoise, Silero VAD)
-- Intent extraction using fine-tuned Llama-3-8B via Bedrock
+- Intent extraction using Anthropic Claude Haiku (4.5) via Bedrock
 - Dialect mapping (Bhojpuri, Maithili, Marwari regional variations)
 - Phonetic matching (Soundex/Metaphone adapted for Indic scripts)
 
-**API Endpoint**: `/api/v1/ingress/voice`
+**API Endpoint**: `/process-audio` AND `/classify-text`
 
 **Request:**
 ```json
@@ -195,12 +195,12 @@ GramSetu is architected into four tightly integrated feature streams, each owned
 
 **Key Components:**
 - AWS Bedrock Agent with AgentCore Browser Tool
-- Visual navigation using Claude 3.5 Sonnet (screenshot analysis)
+- Visual navigation using Claude Sonnet (4.6) (screenshot analysis)
 - Mock Portal infrastructure (S3-hosted clones for development)
 - Session recovery and error classification
 - Portal switcher (dev/mock/production modes)
 
-**API Endpoint**: `/api/v1/agent/execute`
+**API Endpoint**: `/execute-task`
 
 **Request:**
 ```json
@@ -255,7 +255,7 @@ GramSetu is architected into four tightly integrated feature streams, each owned
 
 **API Endpoints:**
 
-**1. Document Ingress**: `/api/v1/ingress/document`
+**1. Document Ingress**: `/process-document`
 ```json
 {
   "document_image_base64": "...",
@@ -321,7 +321,7 @@ GramSetu is architected into four tightly integrated feature streams, each owned
 
 **API Endpoints:**
 
-**1. Job Creation**: `/api/v1/jobs/create`
+**1. Job Creation**: `/jobs`
 ```json
 {
   "job_id": "pmk_2024_02_13_001",
@@ -367,7 +367,7 @@ GramSetu is architected into four tightly integrated feature streams, each owned
 
 **Acceptance Criteria:**
 1. WHEN navigating a portal, THE Agent SHALL capture screenshots of each page state
-2. WHEN analyzing a screenshot, THE Agent SHALL use Claude 3.5 Sonnet to identify interactive elements
+2. WHEN analyzing a screenshot, THE Agent SHALL use Claude Sonnet (4.6) to identify interactive elements
 3. GIVEN an instruction "Click the blue button that says 'Login'", THE Agent SHALL return pixel coordinates (x, y) for the target element
 4. WHEN the DOM structure changes, THE Agent SHALL continue navigation using visual cues without code updates
 5. WHEN an element is not visible, THE Agent SHALL use human-like mouse movements and scrolling to locate it

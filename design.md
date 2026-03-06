@@ -21,8 +21,8 @@ GramSetu implements a **four-pillar autonomous agent architecture** designed for
 | Layer | Technology | Justification |
 |-------|-----------|---------------|
 | Voice Interface | Bhashini ASR/TTS/NMT | Sovereign AI, 11+ Indian languages |
-| Intent Extraction | Llama-3-8B via Bedrock | Local dialect understanding |
-| Visual Navigation | Claude 3.5 Sonnet + AgentCore | Screenshot analysis, resilient to DOM changes |
+| Intent Extraction | Claude v4.5 via Bedrock | Local dialect understanding |
+| Visual Navigation | Claude Sonnet 4.6 + AgentCore | Screenshot analysis, resilient to DOM changes |
 | Browser Automation | AWS Bedrock Browser Tool | Managed, secure remote browser |
 | Document OCR | AWS Textract + OpenCV | Intelligent extraction + edge masking |
 | Message Bus | Redis + Socket.io | Real-time updates, job queuing |
@@ -47,32 +47,32 @@ graph TB
     end
     
     subgraph "Gateway Layer - Member 1"
-        VoiceAPI[/api/v1/ingress/voice]
+        VoiceAPI[/process-audio]
         Bhashini[Bhashini ASR/NMT/TTS]
-        IntentExtractor[Llama-3-8B Intent Extraction]
+        IntentExtractor[Claude 4.5 Agent Extraction]
         DialectMapper[Regional Dialect Mapper]
     end
     
     subgraph "Platform Layer - Member 4"
-        JobQueue[Redis Job Queue]
-        JobAPI[/api/v1/jobs/*]
+        JobQueue[Redis/DynamoDB Job Queue]
+        JobAPI[/jobs/*]
         StateManager[Session State Manager]
         WhatsAppAPI[WhatsApp Notifications]
         EventBus[Socket.io Event Bus]
     end
     
     subgraph "Security Layer - Member 3"
-        DocAPI[/api/v1/ingress/document]
+        DocAPI[/process-document]
         OCREngine[AWS Textract]
-        CrossVerify[/api/v1/identity/cross-verify]
+        CrossVerify[/identity/cross-verify]
         OutputVerify[/api/v1/verify/output]
         ConsentMgr[Consent Manager]
     end
     
     subgraph "Automation Layer - Member 2"
-        AgentAPI[/api/v1/agent/execute]
+        AgentAPI[/execute-task]
         BedrockAgent[AWS Bedrock Agent]
-        VisualNav[Claude 3.5 Sonnet]
+        VisualNav[Claude Sonnet 4.6]
         BrowserTool[AgentCore Browser Tool]
         MockPortal[S3 Mock Portal]
         PortalSwitcher[Portal Mode Switcher]
@@ -131,7 +131,7 @@ Convert noisy vernacular voice into structured job requests with 90%+ intent acc
 
 ```
 Raw Audio → Noise Suppression (RNNoise) → VAD (Silero) → Bhashini ASR (Hindi/Tamil/etc.) → 
-Bhashini NMT (→ English) → Llama-3-8B (Intent Classification) → Dialect Mapping → 
+Bhashini NMT (→ English) → Claude Haiku 4.5 (Intent Classification) → Dialect Mapping → 
 Phonetic Matching → Structured Job Request
 ```
 
@@ -250,7 +250,7 @@ GramSetu approach (Visual):
 # 1. Capture screenshot
 screenshot = browser.screenshot()
 
-# 2. Send to Claude 3.5 Sonnet
+# 2. Send to Claude Sonnet 4.6
 prompt = f"""
 Analyze this government portal screenshot.
 Task: Find the text input field for "Aadhaar Number"

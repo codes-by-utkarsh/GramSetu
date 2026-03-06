@@ -220,7 +220,7 @@ class AyushmanBharatDriver(PortalDriver):
     LIVE_URL = "https://pmjay.gov.in/am-i-eligible"
 
     def __init__(self):
-        super().__init__("ayushman_bharat")
+        super().__init__(SchemeType.AYUSHMAN_BHARAT)
 
     def get_url(self) -> str:
         return self.LIVE_URL
@@ -251,6 +251,46 @@ class AyushmanBharatDriver(PortalDriver):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Ration Card / PDS
+# ─────────────────────────────────────────────────────────────────────────────
+class RationCardDriver(PortalDriver):
+    """
+    Driver for NFSA (National Food Security Act) Ration Card portal.
+    Covers ration card eligibility, status, and beneficiary lookup.
+    """
+
+    LIVE_URL = "https://nfsa.gov.in/portal/ration_card_state_portals_aa"
+
+    def __init__(self):
+        super().__init__(SchemeType.RATION_CARD)
+
+    def get_url(self) -> str:
+        return self.LIVE_URL
+
+    def get_workflow(self) -> list[str]:
+        return [
+            "1. Page loads: NFSA ration card state portals page (nfsa.gov.in)",
+            "2. Identify the citizen's state from form_data",
+            "3. Click the state link/button to open state-specific ration card portal",
+            "4. Find beneficiary search field — enter Aadhaar number or ration card number",
+            "5. Click Search or Submit button",
+            "6. Extract: ration card number, category (APL/BPL/AAY), family head name, members, entitlement",
+            "7. Return 'complete' with extracted ration card details",
+        ]
+
+    def get_vision_context(self) -> str:
+        return """
+        This is the NFSA Ration Card portal (nfsa.gov.in).
+        Look for:
+        - State-wise links or dropdown (click the citizen's state)
+        - After navigating to state portal: Aadhaar or RC number input field
+        - Search/Submit button
+        - Results showing: RC number, holder name, category (APL/BPL/AAY),
+          number of units (kg of grain), member list
+        """
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Controller
 # ─────────────────────────────────────────────────────────────────────────────
 class BedrockAgentController:
@@ -258,11 +298,12 @@ class BedrockAgentController:
 
     def __init__(self):
         self.drivers = {
-            SchemeType.PM_KISAN:      PMKisanDriver(),
-            SchemeType.E_SHRAM:       EShramDriver(),
-            SchemeType.EPFO:          EPFODriver(),
-            SchemeType.WIDOW_PENSION: WidowPensionDriver(),
-            "ayushman_bharat":        AyushmanBharatDriver(),
+            SchemeType.PM_KISAN:        PMKisanDriver(),
+            SchemeType.E_SHRAM:         EShramDriver(),
+            SchemeType.EPFO:            EPFODriver(),
+            SchemeType.WIDOW_PENSION:   WidowPensionDriver(),
+            SchemeType.AYUSHMAN_BHARAT: AyushmanBharatDriver(),
+            SchemeType.RATION_CARD:     RationCardDriver(),
         }
         logger.info(
             f"BedrockAgentController initialized with {len(self.drivers)} "
