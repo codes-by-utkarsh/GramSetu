@@ -26,10 +26,10 @@ class Settings(BaseSettings):
     # AWS Bedrock
     bedrock_agent_id: Optional[str] = None
     bedrock_agent_alias_id: Optional[str] = None
-    # Vision model: Claude Sonnet 4.6 — best active model for screenshot navigation
-    bedrock_model_id: str = "anthropic.claude-sonnet-4-6"
-    # LLM model: Claude Haiku 4.5 — fast & cheap active model
-    bedrock_llm_model: str = "anthropic.claude-haiku-4-5-20251001-v1:0"
+    # Vision model: Claude 3.5 Sonnet — best active model for screenshot navigation
+    bedrock_model_id: str = "anthropic.claude-3-5-sonnet-20240620-v1:0"
+    # LLM model: Claude 3 Haiku — fast & cheap active model
+    bedrock_llm_model: str = "anthropic.claude-3-haiku-20240307-v1:0"
     
     # Bhashini
     bhashini_api_key: Optional[str] = None
