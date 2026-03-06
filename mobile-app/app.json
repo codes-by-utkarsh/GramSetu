@@ -6,6 +6,7 @@
     "owner": "drizzlehxs-organization",
     "android": {
       "package": "com.gramsetu.app",
+      "usesCleartextTraffic": true,
       "permissions": [
         "CAMERA",
         "RECORD_AUDIO",
