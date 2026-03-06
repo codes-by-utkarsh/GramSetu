@@ -70,6 +70,8 @@ screenshots/
 *.jpeg
 !docs/assets/*.png
 !docs/assets/*.jpg
+!mobile-app/assets/*.png
+!mobile-app/assets/*.jpg
 
 # Audio Files
 *.wav
