@@ -121,16 +121,37 @@ EXAMPLES:
             # Validate enum values
             valid_schemes = {s.value for s in SchemeType}
             valid_intents = {i.value for i in IntentType}
-            if result.get("scheme") not in valid_schemes:
-                result["scheme"] = self._classify_rules(text).get("scheme", SchemeType.PM_KISAN)
-            if result.get("intent") not in valid_intents:
-                result["intent"] = IntentType.CHECK_STATUS
+            
+            # Extract string value if it's an Enum object
+            current_scheme = result.get("scheme")
+            scheme_val = current_scheme.value if hasattr(current_scheme, "value") else current_scheme
+            
+            if scheme_val not in valid_schemes:
+                fallback = self._classify_rules(text).get("scheme")
+                result["scheme"] = fallback.value if hasattr(fallback, "value") else (fallback or SchemeType.PM_KISAN.value)
+            else:
+                result["scheme"] = scheme_val
+
+            current_intent = result.get("intent")
+            intent_val = current_intent.value if hasattr(current_intent, "value") else current_intent
+            if intent_val not in valid_intents:
+                result["intent"] = IntentType.CHECK_STATUS.value
+            else:
+                result["intent"] = intent_val
 
             return result
 
         except Exception as e:
             logger.error(f"Intent classification failed: {e}")
-            return self._classify_rules(text)
+            fallback_res = self._classify_rules(text)
+            
+            # Ensure safe serialization by returning strictly strings for Enums
+            fallback_scheme = fallback_res.get("scheme")
+            fallback_intent = fallback_res.get("intent")
+            
+            fallback_res["scheme"] = fallback_scheme.value if hasattr(fallback_scheme, "value") else (fallback_scheme or SchemeType.PM_KISAN.value)
+            fallback_res["intent"] = fallback_intent.value if hasattr(fallback_intent, "value") else IntentType.CHECK_STATUS.value
+            return fallback_res
 
     async def _classify_bedrock(self, text: str) -> Dict[str, Any]:
         """Use AWS Bedrock Claude for classification — proper system/user message split."""
@@ -270,7 +291,7 @@ EXAMPLES:
             ],
             SchemeType.E_SHRAM: [
                 "e-shram", "eshram", "e shram", "shram", "labour", "labor",
-                "shramik", "worker card", "majdur", "mazdoor"
+                "shramik", "worker card", "majdur", "mazdoor", "e-sharam", "sharam"
             ],
             SchemeType.EPFO: [
                 "epfo", "provident fund", "pf", "epf", "employee fund"
