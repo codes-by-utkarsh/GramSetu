@@ -25,7 +25,9 @@ const getBaseIp = () => {
 
 const BASE_IP = getBaseIp();
 
-export const API_BASE = `http://${BASE_IP}:8000`;
-export const VOICE_API = `http://${BASE_IP}:8001`;
-export const AGENT_API = `http://${BASE_IP}:8002`;
-export const DOC_API = `http://${BASE_IP}:8003`;
+// We are now using a secure HTTPS Nginx Reverse Proxy on AWS
+// with nip.io automatically handling DNS for the IP address!
+export const API_BASE = IS_PRODUCTION ? `https://${BASE_IP}.nip.io/orchestrator` : `http://${BASE_IP}:8000`;
+export const VOICE_API = IS_PRODUCTION ? `https://${BASE_IP}.nip.io/voice` : `http://${BASE_IP}:8001`;
+export const AGENT_API = IS_PRODUCTION ? `https://${BASE_IP}.nip.io/agent` : `http://${BASE_IP}:8002`;
+export const DOC_API = IS_PRODUCTION ? `https://${BASE_IP}.nip.io/docs` : `http://${BASE_IP}:8003`;
