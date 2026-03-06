@@ -1,14 +1,36 @@
 {
   "expo": {
+    "name": "GramSetu",
+    "slug": "gramsetu",
+    "version": "1.0.0",
+    "owner": "drizzlehxs-organization",
+    "android": {
+      "package": "com.gramsetu.app",
+      "permissions": [
+        "CAMERA",
+        "RECORD_AUDIO",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE"
+      ]
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow GramSetu to access your camera to scan Aadhaar and PAN documents."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow GramSetu to access your microphone to record voice commands in regional languages."
+        }
+      ]
+    ],
     "extra": {
       "eas": {
         "projectId": "9de037f5-ee90-4ab1-afc6-682bb3ada054"
       }
-    },
-    "owner": "drizzlehxs-organization",
-    "slug": "gramsetu",
-    "android": {
-      "package": "com.gramsetu.app"
     }
   }
 }

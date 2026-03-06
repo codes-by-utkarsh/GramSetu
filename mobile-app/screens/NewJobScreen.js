@@ -22,17 +22,7 @@ import { Platform } from 'react-native';
 import Constants from 'expo-constants';
 
 // ── API endpoints ─────────────────────────────────────────────
-const getApiBase = () => {
-    if (typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost')
-        return `http://${window.location.hostname}:8000`;
-    if (Platform.OS === 'android') return 'http://10.0.2.2:8000';
-    const host = Constants.expoConfig?.hostUri?.split(':')[0];
-    return host ? `http://${host}:8000` : 'http://localhost:8000';
-};
-const API_BASE = getApiBase();
-const VOICE_API = API_BASE.replace(':8000', ':8001');
-const DOC_API = API_BASE.replace(':8000', ':8003');
-const AGENT_API = API_BASE.replace(':8000', ':8002');
+import { API_BASE, VOICE_API, AGENT_API, DOC_API } from '../config';
 
 // ── Step constants ─────────────────────────────────────────────
 const STEPS = {

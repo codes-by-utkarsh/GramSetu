@@ -15,17 +15,7 @@ import { Picker } from '@react-native-picker/picker';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
 import NewJobScreen from './screens/NewJobScreen';
-
-const API_BASE = typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost'
-    ? `http://${window.location.hostname}:8000`
-    : Platform.OS === 'android'
-        ? 'http://10.0.2.2:8000'
-        : Constants.expoConfig?.hostUri
-            ? `http://${Constants.expoConfig.hostUri.split(':')[0]}:8000`
-            : 'http://localhost:8000';
-
-const VOICE_API = API_BASE.replace(':8000', ':8001');
-const AGENT_API = API_BASE.replace(':8000', ':8002');
+import { API_BASE, VOICE_API, AGENT_API, DOC_API } from './config';
 
 // ==========================================
 // 1. i18n Dictionary & Context Setup
@@ -1098,8 +1088,8 @@ function ScannerScreen({ navigation }) {
             try {
                 const photo = await cameraRef.takePictureAsync({ base64: true, quality: 0.5 });
 
-                // Submit to local Document API on Port 8003
-                const response = await fetch('http://localhost:8003/process-document', {
+                // Submit to Document API on Port 8003
+                const response = await fetch(`${DOC_API}/process-document`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({

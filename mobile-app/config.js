@@ -1,0 +1,31 @@
+import { Platform } from 'react-native';
+import Constants from 'expo-constants';
+
+// =========================================================================
+// PRODUCTION SERVER CONFIGURATION
+// To build an APK connecting to AWS:
+// 1. Change IS_PRODUCTION to true
+// 2. Set PRODUCTION_IP to your AWS EC2 Public IPv4 Address
+// =========================================================================
+export const IS_PRODUCTION = false; // <-- SET TO true BEFORE RUNNING `eas build`
+export const PRODUCTION_IP = "13.123.45.67"; // <-- REPLACE WITH YOUR EC2 IP
+
+const getBaseIp = () => {
+    if (IS_PRODUCTION) return PRODUCTION_IP;
+
+    if (typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost') {
+        return window.location.hostname;
+    }
+    if (Platform.OS === 'android') {
+        return '10.0.2.2'; // Standard IP alias for Android Emulator looking at host
+    }
+    const host = Constants.expoConfig?.hostUri?.split(':')[0];
+    return host || 'localhost';
+};
+
+const BASE_IP = getBaseIp();
+
+export const API_BASE = `http://${BASE_IP}:8000`;
+export const VOICE_API = `http://${BASE_IP}:8001`;
+export const AGENT_API = `http://${BASE_IP}:8002`;
+export const DOC_API = `http://${BASE_IP}:8003`;
