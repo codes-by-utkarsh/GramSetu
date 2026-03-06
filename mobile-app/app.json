@@ -1,0 +1,14 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "9de037f5-ee90-4ab1-afc6-682bb3ada054"
+      }
+    },
+    "owner": "drizzlehxs-organization",
+    "slug": "gramsetu",
+    "android": {
+      "package": "com.gramsetu.app"
+    }
+  }
+}

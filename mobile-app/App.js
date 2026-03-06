@@ -9,11 +9,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Audio } from 'expo-av';
 import { Camera } from 'expo-camera';
 import * as FileSystem from 'expo-file-system';
-import Icon from 'react-native-vector-icons/MaterialCommunityIcons';
+import Icon from '@expo/vector-icons/MaterialCommunityIcons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Picker } from '@react-native-picker/picker';
 import Constants from 'expo-constants';
 import { Platform } from 'react-native';
+import NewJobScreen from './screens/NewJobScreen';
 
 const API_BASE = typeof window !== 'undefined' && window.location?.hostname && window.location.hostname !== 'localhost'
     ? `http://${window.location.hostname}:8000`
@@ -838,46 +839,55 @@ function DashboardScreen({ navigation }) {
                     </Card>
                 </View>
 
-                {/* Quick Actions */}
-                <View style={styles.quickActionsContainer}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        <Button
-                            mode="contained"
-                            icon="camera-document"
-                            buttonColor={"#ffffff"}
-                            textColor={gramSetuTheme.colors.primary}
-                            style={styles.actionButton}
-                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
-                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
-                            onPress={() => navigation.navigate('Scanner')}
+                {/* New Service Request — primary CTA */}
+                <TouchableOpacity
+                    onPress={() => navigation.navigate('NewJob')}
+                    activeOpacity={0.88}
+                    style={{ marginBottom: 20 }}
+                >
+                    <LinearGradient
+                        colors={['#FF9800', '#E65100']}
+                        start={{ x: 0, y: 0 }} end={{ x: 1, y: 0 }}
+                        style={{
+                            borderRadius: 18, padding: 20, flexDirection: 'row',
+                            alignItems: 'center', elevation: 8,
+                            shadowColor: '#FF9800', shadowOffset: { width: 0, height: 4 },
+                            shadowOpacity: 0.4, shadowRadius: 8
+                        }}
+                    >
+                        <Icon name="plus-circle" size={42} color="#fff" />
+                        <View style={{ marginLeft: 16, flex: 1 }}>
+                            <Text style={{ color: '#fff', fontSize: 20, fontWeight: '900' }}>New Service Request</Text>
+                            <Text style={{ color: '#FFE0B2', fontSize: 13, marginTop: 2 }}>
+                                Voice → Aadhaar → AI Portal Automation
+                            </Text>
+                        </View>
+                        <Icon name="chevron-right" size={28} color="#fff" />
+                    </LinearGradient>
+                </TouchableOpacity>
+
+                {/* Scheme quick tiles */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10, marginBottom: 20 }}>
+                    {[
+                        { label: 'PM-Kisan', icon: 'sprout', scheme: 'pm_kisan' },
+                        { label: 'e-Shram', icon: 'hammer-wrench', scheme: 'e_shram' },
+                        { label: 'Ayushman', icon: 'hospital-box', scheme: 'ayushman_bharat' },
+                        { label: 'EPFO', icon: 'shield-account', scheme: 'epfo' },
+                        { label: 'Pension', icon: 'account-heart', scheme: 'widow_pension' },
+                        { label: 'Scan Aadhaar', icon: 'card-scan', scheme: null },
+                    ].map(({ label, icon, scheme }) => (
+                        <TouchableOpacity
+                            key={label}
+                            style={{
+                                width: '30%', backgroundColor: '#fff', borderRadius: 14, padding: 14,
+                                alignItems: 'center', elevation: 2, borderWidth: 1, borderColor: '#C8E6C9'
+                            }}
+                            onPress={() => scheme ? navigation.navigate('NewJob') : navigation.navigate('Scanner')}
                         >
-                            {t.scanAadhaar}
-                        </Button>
-                        <Button
-                            mode="contained"
-                            icon="tractor"
-                            buttonColor={"#ffffff"}
-                            textColor={gramSetuTheme.colors.primary}
-                            style={[styles.actionButton, { marginLeft: 10 }]}
-                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
-                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
-                            onPress={() => executeAgentTask('pm_kisan', 'apply_new')}
-                        >
-                            PM-Kisan
-                        </Button>
-                        <Button
-                            mode="contained"
-                            icon="card-account-details-outline"
-                            buttonColor={"#ffffff"}
-                            textColor={gramSetuTheme.colors.primary}
-                            style={[styles.actionButton, { marginLeft: 10 }]}
-                            contentStyle={{ paddingVertical: 8, paddingHorizontal: 15 }}
-                            labelStyle={{ fontWeight: 'bold', fontSize: 14 }}
-                            onPress={() => executeAgentTask('e_shram', 'register')}
-                        >
-                            e-Shram
-                        </Button>
-                    </ScrollView>
+                            <Icon name={icon} size={28} color={gramSetuTheme.colors.primary} />
+                            <Text style={{ color: '#1a1a1a', fontWeight: '700', marginTop: 6, fontSize: 12, textAlign: 'center' }}>{label}</Text>
+                        </TouchableOpacity>
+                    ))}
                 </View>
 
                 <Title style={styles.sectionTitle}>{t.todayQueue}</Title>
@@ -924,7 +934,7 @@ function ProfileScreen({ navigation }) {
                 setTwilioNumber(parsed.twilioNumber || '');
                 // Try fetching remote profile
                 try {
-                    const resp = await fetch(`http://localhost:8000/user/${parsed.phone}`);
+                    const resp = await fetch(`${API_BASE}/user/${parsed.phone}`);
                     if (resp.ok) {
                         const data = await resp.json();
                         setFullName(data.data.full_name || '');
@@ -940,7 +950,7 @@ function ProfileScreen({ navigation }) {
     const handleSave = async () => {
         setLoading(true);
         try {
-            const response = await fetch('http://localhost:8000/user/update', {
+            const response = await fetch(`${API_BASE}/user/update`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -1323,6 +1333,7 @@ export default function App() {
                         <Stack.Screen name="OTP" component={OtpScreen} />
                         <Stack.Screen name="Dashboard" component={DrawerNavigator} />
                         <Stack.Screen name="Scanner" component={ScannerScreen} />
+                        <Stack.Screen name="NewJob" component={NewJobScreen} options={{ headerShown: false }} />
                     </Stack.Navigator>
                 </NavigationContainer>
             </PaperProvider>
