@@ -1,6 +1,6 @@
 """
 GramSetu Orchestrator Service — API Gateway
-- Auth (signup / login / OTP)
+- Auth (signup / login — password-based, no OTP)
 - Beneficiary management (per VLE, stored in DynamoDB)
 - Job queue + real-time WebSocket status updates
 - Human-in-the-loop input requests from agent
@@ -28,8 +28,8 @@ logger = setup_logging("orchestrator")
 job_manager = JobManager()
 whatsapp_client = WhatsAppClient()
 
-# In-memory OTP store (TTL-like dict; fine for MVP)
-OTP_STORE: Dict[str, str] = {}
+# Simple in-memory session tokens after login (mvp; replace with JWT in prod)
+SESSION_STORE: Dict[str, str] = {}
 
 # Active WebSocket connections per VLE phone
 WS_CONNECTIONS: Dict[str, List[WebSocket]] = {}
@@ -86,7 +86,7 @@ async def health_check():
 
 
 # ──────────────────────────────────────────────────────
-# Auth — Signup / Login / Verify OTP
+# Auth — Simple Password-Based Login / Signup (no OTP)
 # ──────────────────────────────────────────────────────
 
 class LoginRequest(BaseModel):
@@ -98,57 +98,41 @@ class SignupRequest(BaseModel):
     password: str
     fullName: str = ""
     cscId: str = ""
-    twilioNumber: str = ""
 
-class VerifyRequest(BaseModel):
-    phone: str
-    otp: str
-    is_new_user: bool = False
-    twilio_number: str = ""
-    fullName: str = ""
+
+@app.get("/auth/check/{phone}")
+async def auth_check(phone: str):
+    """Check if a phone number is already registered. Used by frontend to decide login vs signup."""
+    user = await job_manager.get_user(phone)
+    return {"exists": bool(user)}
 
 
 @app.post("/auth/signup")
 async def auth_signup(req: SignupRequest):
+    """Register a new VLE. Returns error if user already exists."""
     user = await job_manager.get_user(req.phone)
     if user:
-        raise HTTPException(status_code=400, detail="User already exists")
-    otp = str(random.randint(100000, 999999))
-    OTP_STORE[req.phone] = otp
-    success = await whatsapp_client.send_otp(req.phone, otp)
-    resp = {"status": "success", "message": "OTP sent for registration"}
-    if not success:
-        resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
-    if settings.environment == "development":
-        resp["dev_otp"] = otp
-    return resp
+        raise HTTPException(status_code=400, detail="User already exists. Please login instead.")
+    # Store user with hashed-like password (plain text for MVP — add bcrypt in prod)
+    await job_manager.create_user(req.phone, "", req.fullName, password=req.password)
+    return {"status": "success", "message": "Account created. You can now log in.",
+            "user": {"phone": req.phone, "fullName": req.fullName}}
 
 
 @app.post("/auth/login")
 async def auth_login(req: LoginRequest):
+    """Verify phone + password, return user profile on success."""
     user = await job_manager.get_user(req.phone)
     if not user:
-        raise HTTPException(status_code=404, detail="User not found. Please sign up.")
-    otp = str(random.randint(100000, 999999))
-    OTP_STORE[req.phone] = otp
-    success = await whatsapp_client.send_otp(req.phone, otp)
-    resp = {"status": "success", "message": "OTP generated for login"}
-    if not success:
-        resp["message"] = "OTP generated (WhatsApp delivery may be delayed)"
-    if settings.environment == "development":
-        resp["dev_otp"] = otp
-    return resp
-
-
-@app.post("/auth/verify")
-async def auth_verify(req: VerifyRequest):
-    stored_otp = OTP_STORE.get(req.phone)
-    if not stored_otp or stored_otp != req.otp:
-        raise HTTPException(status_code=400, detail="Invalid or expired OTP")
-    if req.is_new_user:
-        await job_manager.create_user(req.phone, req.twilio_number, req.fullName)
-    del OTP_STORE[req.phone]
-    return {"status": "success", "message": "Authenticated"}
+        raise HTTPException(status_code=404, detail="Account not found. Please sign up first.")
+    stored_password = user.get("password", "")
+    if stored_password != req.password:
+        raise HTTPException(status_code=401, detail="Incorrect password.")
+    return {
+        "status": "success",
+        "message": "Login successful",
+        "user": {"phone": req.phone, "fullName": user.get("fullName", ""), "cscId": user.get("cscId", "")}
+    }
 
 
 # ──────────────────────────────────────────────────────

@@ -285,292 +285,180 @@ function LanguageSelectionScreen({ navigation }) {
 }
 
 // ==========================================
-// 4a. Sign Up Screen
+// 4. Auth Screen — Login + Signup (no OTP)
 // ==========================================
-function SignUpScreen({ navigation }) {
+function AuthScreen({ navigation }) {
     const t = useTranslation();
-    const [whatsapp, setWhatsapp] = useState('');
+    // 'signup' is the default tab shown first
+    const [mode, setMode] = useState('signup');
+    const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
     const [fullName, setFullName] = useState('');
-    const [twilioNumber, setTwilioNumber] = useState('');
     const [loading, setLoading] = useState(false);
 
+    const switchToLogin = (prefillPhone) => {
+        if (prefillPhone) setPhone(prefillPhone);
+        setMode('login');
+    };
+
     const handleSignUp = async () => {
-        if (!whatsapp || !password || !fullName || !twilioNumber) {
+        if (!phone || !password || !fullName) {
             Alert.alert('Error', t.errorRequired);
             return;
         }
-
         setLoading(true);
         try {
             const response = await fetch(`${API_BASE}/auth/signup`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone: whatsapp, password, fullName, twilioNumber, cscId: '' })
+                body: JSON.stringify({ phone, password, fullName })
             });
+            const data = await response.json();
 
             if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Sign Up Failed');
+                if (response.status === 400 && data.detail?.includes('already exists')) {
+                    // Auto-switch to login and show a helpful message
+                    Alert.alert(
+                        'Account Exists',
+                        'This phone number is already registered. Switching to Login.',
+                        [{ text: 'OK', onPress: () => switchToLogin(phone) }]
+                    );
+                } else {
+                    throw new Error(data.detail || 'Sign up failed');
+                }
+                return;
             }
 
-            setLoading(false);
-            // After successful signup, they need OTP to verify
-            navigation.navigate('OTP', { whatsapp, password, twilioNumber, isNewUser: true, fullName });
+            // Success: auto-login the user without extra step
+            await AsyncStorage.setItem('user', JSON.stringify({ phone, fullName, isLoggedIn: true }));
+            navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });
 
         } catch (err) {
-            setLoading(false);
             Alert.alert('Sign Up Error', err.message);
-        }
-    };
-
-    return (
-        <GradientBackground>
-            <View style={[styles.centerAll, { flex: 1, paddingVertical: 20 }]}>
-                <GramSetuLogo size={60} />
-                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
-                    <Card.Content>
-                        <Title style={styles.authTitle}>Sign Up for GramSetu</Title>
-                        <Paragraph style={styles.authSubtitle}>Create your VLE Profile</Paragraph>
-
-                        <TextInput
-                            style={styles.input}
-                            placeholder="Full Name"
-                            placeholderTextColor="#888"
-                            value={fullName}
-                            onChangeText={setFullName}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder={t.whatsappNum}
-                            placeholderTextColor="#888"
-                            keyboardType="phone-pad"
-                            value={whatsapp}
-                            onChangeText={setWhatsapp}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder="+1 (Twilio Sender Number)"
-                            placeholderTextColor="#888"
-                            keyboardType="phone-pad"
-                            value={twilioNumber}
-                            onChangeText={setTwilioNumber}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder={t.password}
-                            placeholderTextColor="#888"
-                            secureTextEntry
-                            value={password}
-                            onChangeText={setPassword}
-                        />
-
-                        <Button
-                            mode="contained"
-                            onPress={handleSignUp}
-                            style={styles.submitBtn}
-                            buttonColor={gramSetuTheme.colors.secondary}
-                            labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
-                            loading={loading}
-                            disabled={loading}
-                        >
-                            Sign Up & Request OTP
-                        </Button>
-
-                        <Button
-                            mode="text"
-                            onPress={() => navigation.navigate('Auth')}
-                            style={{ marginTop: 10 }}
-                            textColor={gramSetuTheme.colors.primary}
-                        >
-                            Already have an account? Login
-                        </Button>
-                    </Card.Content>
-                </Card>
-            </View>
-        </GradientBackground>
-    );
-}
-
-// ==========================================
-// 4b. Auth / Login Screen
-// ==========================================
-function AuthScreen({ navigation }) {
-    const t = useTranslation();
-    const [whatsapp, setWhatsapp] = useState('');
-    const [password, setPassword] = useState('');
-    const [loading, setLoading] = useState(false);
-
-    const handleContinue = async () => {
-        if (!whatsapp || !password) {
-            Alert.alert('Error', t.errorRequired);
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await fetch(`${API_BASE}/auth/login`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone: whatsapp, password })
-            });
-
-            if (!response.ok) {
-                const error = await response.json();
-                throw new Error(error.detail || 'Login Failed');
-            }
-
-            setLoading(false);
-            navigation.navigate('OTP', { whatsapp, password, isNewUser: false });
-
-        } catch (err) {
-            setLoading(false);
-            Alert.alert('Login Error', err.message);
-        }
-    };
-
-    return (
-        <GradientBackground>
-            <View style={[styles.centerAll, { flex: 1 }]}>
-                <GramSetuLogo size={80} />
-
-                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
-                    <Card.Content>
-                        <Title style={styles.authTitle}>{t.authTitle}</Title>
-                        <Paragraph style={styles.authSubtitle}>{t.authSubtitle}</Paragraph>
-
-                        <TextInput
-                            style={styles.input}
-                            placeholder={t.whatsappNum}
-                            placeholderTextColor="#888"
-                            keyboardType="phone-pad"
-                            value={whatsapp}
-                            onChangeText={setWhatsapp}
-                        />
-                        <TextInput
-                            style={styles.input}
-                            placeholder={t.password}
-                            placeholderTextColor="#888"
-                            secureTextEntry
-                            value={password}
-                            onChangeText={setPassword}
-                        />
-
-                        <Button
-                            mode="contained"
-                            onPress={handleContinue}
-                            style={styles.submitBtn}
-                            buttonColor={gramSetuTheme.colors.primary}
-                            labelStyle={{ fontSize: 16 }}
-                            loading={loading}
-                            disabled={loading}
-                        >
-                            {t.continue}
-                        </Button>
-
-                        <Button
-                            mode="text"
-                            onPress={() => navigation.navigate('SignUp')}
-                            style={{ marginTop: 10 }}
-                            textColor={gramSetuTheme.colors.secondary}
-                        >
-                            New VLE? Create an Account
-                        </Button>
-                    </Card.Content>
-                </Card>
-            </View>
-        </GradientBackground>
-    );
-}
-
-// ==========================================
-// 5. OTP Screen
-// ==========================================
-function OtpScreen({ route, navigation }) {
-    const t = useTranslation();
-    const { whatsapp, password, isNewUser, twilioNumber, fullName } = route.params;
-    const [otp, setOtp] = useState('');
-    const [loading, setLoading] = useState(false);
-
-    const handleVerify = async () => {
-        if (!otp) {
-            Alert.alert('Error', t.errorRequired);
-            return;
-        }
-
-        setLoading(true);
-        try {
-            // Verify against Real AWS Python Backend
-            const response = await fetch(`${API_BASE}/auth/verify`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    phone: whatsapp,
-                    otp,
-                    is_new_user: isNewUser || false,
-                    twilio_number: twilioNumber || "",
-                    fullName: fullName || ""
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('Invalid OTP passed');
-            }
-
-            // Authentication & DynamoDB Registration Success
-            const userData = { phone: whatsapp, isLoggedIn: true, isNewUser, twilioNumber };
-            await AsyncStorage.setItem('user', JSON.stringify(userData));
-
-            // Clear navigation stack and go to Dashboard
-            navigation.reset({
-                index: 0,
-                routes: [{ name: 'Dashboard' }],
-            });
-
-        } catch (err) {
-            Alert.alert('Verification Failed', err.message);
         } finally {
             setLoading(false);
         }
     };
 
+    const handleLogin = async () => {
+        if (!phone || !password) {
+            Alert.alert('Error', t.errorRequired);
+            return;
+        }
+        setLoading(true);
+        try {
+            const response = await fetch(`${API_BASE}/auth/login`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, password })
+            });
+            const data = await response.json();
+
+            if (!response.ok) {
+                throw new Error(data.detail || 'Login failed');
+            }
+
+            const userData = { phone, fullName: data.user?.fullName || '', isLoggedIn: true };
+            await AsyncStorage.setItem('user', JSON.stringify(userData));
+            navigation.reset({ index: 0, routes: [{ name: 'Dashboard' }] });
+
+        } catch (err) {
+            Alert.alert('Login Error', err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const isLogin = mode === 'login';
+
     return (
         <GradientBackground>
-            <View style={[styles.centerAll, { flex: 1 }]}>
-                <Icon name="shield-check" size={80} color="#4CAF50" style={{ marginBottom: 20 }} />
+            <ScrollView contentContainerStyle={[styles.centerAll, { flexGrow: 1, paddingVertical: 40, paddingHorizontal: 20 }]}>
+                <GramSetuLogo size={80} />
 
-                <Card style={[styles.authCard, { width: '90%', elevation: 8 }]}>
+                {/* Tab switcher */}
+                <View style={{ flexDirection: 'row', backgroundColor: '#e8eef4', borderRadius: 14, padding: 4, marginBottom: 24, width: '100%' }}>
+                    {['signup', 'login'].map((tab) => (
+                        <TouchableOpacity
+                            key={tab}
+                            onPress={() => setMode(tab)}
+                            style={{
+                                flex: 1, paddingVertical: 12, borderRadius: 11, alignItems: 'center',
+                                backgroundColor: mode === tab ? '#ffffff' : 'transparent',
+                                elevation: mode === tab ? 3 : 0,
+                                shadowColor: '#000', shadowOpacity: mode === tab ? 0.08 : 0, shadowRadius: 4
+                            }}
+                        >
+                            <Text style={{
+                                fontWeight: '700', fontSize: 15,
+                                color: mode === tab ? gramSetuTheme.colors.primary : '#888'
+                            }}>
+                                {tab === 'signup' ? 'Create Account' : 'Login'}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                </View>
+
+                <Card style={[styles.authCard, { width: '100%', elevation: 8 }]}>
                     <Card.Content>
-                        <Title style={styles.authTitle}>{t.otpTitle}</Title>
-                        <Paragraph style={[styles.authSubtitle, { marginBottom: 5 }]}>{t.otpSubtitle}</Paragraph>
-                        <Paragraph style={{ textAlign: 'center', color: gramSetuTheme.colors.primary, fontWeight: 'bold', marginBottom: 25 }}>
-                            +91 {whatsapp}
+                        <Title style={styles.authTitle}>
+                            {isLogin ? 'Welcome Back!' : 'Join GramSetu'}
+                        </Title>
+                        <Paragraph style={styles.authSubtitle}>
+                            {isLogin ? 'Enter your credentials to continue' : 'Create your VLE profile'}
                         </Paragraph>
 
+                        {!isLogin && (
+                            <TextInput
+                                style={styles.input}
+                                placeholder="Full Name"
+                                placeholderTextColor="#888"
+                                value={fullName}
+                                onChangeText={setFullName}
+                            />
+                        )}
+
                         <TextInput
-                            style={[styles.input, { textAlign: 'center', fontSize: 24, letterSpacing: 5 }]}
-                            placeholder="× × × × × ×"
+                            style={styles.input}
+                            placeholder="Phone Number"
                             placeholderTextColor="#888"
-                            keyboardType="number-pad"
-                            maxLength={6}
-                            value={otp}
-                            onChangeText={setOtp}
+                            keyboardType="phone-pad"
+                            value={phone}
+                            onChangeText={setPhone}
+                        />
+
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Password"
+                            placeholderTextColor="#888"
+                            secureTextEntry
+                            value={password}
+                            onChangeText={setPassword}
                         />
 
                         <Button
                             mode="contained"
-                            onPress={handleVerify}
+                            onPress={isLogin ? handleLogin : handleSignUp}
                             style={styles.submitBtn}
-                            buttonColor={gramSetuTheme.colors.secondary}
+                            buttonColor={isLogin ? gramSetuTheme.colors.primary : gramSetuTheme.colors.secondary}
                             labelStyle={{ fontSize: 16, fontWeight: 'bold' }}
                             loading={loading}
                             disabled={loading}
                         >
-                            {t.verifyOtp}
+                            {isLogin ? 'Login' : 'Create Account'}
+                        </Button>
+
+                        <Button
+                            mode="text"
+                            onPress={() => setMode(isLogin ? 'signup' : 'login')}
+                            style={{ marginTop: 8 }}
+                            textColor={gramSetuTheme.colors.primary}
+                        >
+                            {isLogin ? 'New here? Create an account' : 'Already have an account? Login'}
                         </Button>
                     </Card.Content>
                 </Card>
-            </View>
+            </ScrollView>
         </GradientBackground>
     );
 }
@@ -1319,8 +1207,6 @@ export default function App() {
                         <Stack.Screen name="Splash" component={SplashScreen} />
                         <Stack.Screen name="LanguageSelection" component={LanguageSelectionScreen} />
                         <Stack.Screen name="Auth" component={AuthScreen} />
-                        <Stack.Screen name="SignUp" component={SignUpScreen} />
-                        <Stack.Screen name="OTP" component={OtpScreen} />
                         <Stack.Screen name="Dashboard" component={DrawerNavigator} />
                         <Stack.Screen name="Scanner" component={ScannerScreen} />
                         <Stack.Screen name="NewJob" component={NewJobScreen} options={{ headerShown: false }} />

@@ -37,12 +37,14 @@ class JobManager:
     # VLE User management
     # ──────────────────────────────────────────
 
-    async def create_user(self, phone: str, twilio_number: str, full_name: str = ""):
+    async def create_user(self, phone: str, twilio_number: str, full_name: str = "", password: str = ""):
         try:
             self.users_table.put_item(Item={
                 'phone': phone,
                 'full_name': full_name,
+                'fullName': full_name,
                 'twilio_number': twilio_number,
+                'password': password,
                 'created_at': datetime.utcnow().isoformat()
             })
             logger.info(f"VLE {phone} registered in DynamoDB")
