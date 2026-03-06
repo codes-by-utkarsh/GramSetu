@@ -71,6 +71,8 @@ class Settings(BaseSettings):
     # S3 Storage
     s3_bucket_name: Optional[str] = None
     s3_lifecycle_days: int = 1
+    # Transcribe: temp bucket for audio uploads (auto-created if missing)
+    aws_transcribe_bucket: str = "gramsetu-transcribe-audio"
     
     # Local Storage
     local_storage_path: str = "./storage"
