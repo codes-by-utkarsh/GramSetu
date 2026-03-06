@@ -12,6 +12,8 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     libsndfile1 \
     ffmpeg \
+    build-essential \
+    python3-dev \
     && curl -fsSL https://deb.nodesource.com/setup_18.x | bash - \
     && apt-get install -y nodejs \
     && rm -rf /var/lib/apt/lists/*
