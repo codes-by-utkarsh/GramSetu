@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     
     # AWS
     aws_region: str = "ap-south-1"
+    aws_bedrock_region: str = "us-east-1" # Bedrock AI models are hosted in US by default
     aws_access_key_id: Optional[str] = None
     aws_secret_access_key: Optional[str] = None
     
