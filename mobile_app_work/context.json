@@ -1,0 +1,761 @@
+{
+  "project": {
+    "name": "GramSetu",
+    "tagline": "Voice-first vernacular access to government schemes for rural India",
+    "version": "1.0.0",
+    "android_package": "com.gramsetu.app",
+    "eas_project_id": "9de037f5-ee90-4ab1-afc6-682bb3ada054",
+    "owner": "drizzlehxs-organization",
+    "target_users": "VLE (Village Level Entrepreneurs) at CSC centers"
+  },
+
+  "servers": {
+    "production": {
+      "ec2_ip": "43.205.117.14",
+      "orchestrator": "http://43.205.117.14:8000",
+      "voice_service": "http://43.205.117.14:8001",
+      "agent_service": "http://43.205.117.14:8002",
+      "document_service": "http://43.205.117.14:8003"
+    },
+    "local_android_emulator": {
+      "orchestrator": "http://10.0.2.2:8000",
+      "voice_service": "http://10.0.2.2:8001",
+      "agent_service": "http://10.0.2.2:8002",
+      "document_service": "http://10.0.2.2:8003"
+    },
+    "local_ios_or_web": {
+      "orchestrator": "http://localhost:8000",
+      "voice_service": "http://localhost:8001",
+      "agent_service": "http://localhost:8002",
+      "document_service": "http://localhost:8003"
+    },
+    "websocket": {
+      "live_job_updates": "ws://{host}:8000/ws/{vle_phone}"
+    }
+  },
+
+  "api_endpoints": {
+    "auth": {
+      "signup": {
+        "method": "POST",
+        "url": "/signup",
+        "body": { "phone": "string", "name": "string" },
+        "response": { "message": "string", "otp_sent": true }
+      },
+      "login": {
+        "method": "POST",
+        "url": "/login",
+        "body": { "phone": "string" },
+        "response": { "message": "string", "otp_sent": true }
+      },
+      "verify_otp": {
+        "method": "POST",
+        "url": "/verify-otp",
+        "body": { "phone": "string", "otp": "string" },
+        "response": { "success": true, "token": "string" }
+      }
+    },
+
+    "user": {
+      "get_profile": {
+        "method": "GET",
+        "url": "/user/{phone}",
+        "response": {
+          "data": {
+            "phone": "string",
+            "full_name": "string",
+            "twilio_number": "string",
+            "dob": "string",
+            "csc_id": "string"
+          }
+        }
+      },
+      "update_profile": {
+        "method": "POST",
+        "url": "/user/update",
+        "body": {
+          "phone": "string",
+          "fullName": "string",
+          "twilioNumber": "string",
+          "dob": "string",
+          "cscId": "string"
+        },
+        "response": { "success": true }
+      }
+    },
+
+    "beneficiaries": {
+      "list": {
+        "method": "GET",
+        "url": "/beneficiaries/{vle_phone}",
+        "response": {
+          "data": [
+            { "beneficiary_id": "string", "name": "string", "phone": "string" }
+          ]
+        }
+      },
+      "create": {
+        "method": "POST",
+        "url": "/beneficiaries",
+        "body": {
+          "vle_phone": "string",
+          "name": "string",
+          "phone": "string"
+        },
+        "response": { "beneficiary_id": "string" }
+      },
+      "update": {
+        "method": "POST",
+        "url": "/beneficiaries/update",
+        "body": {
+          "vle_phone": "string",
+          "beneficiary_id": "string",
+          "updates": {}
+        },
+        "response": { "success": true }
+      }
+    },
+
+    "jobs": {
+      "create": {
+        "method": "POST",
+        "url": "/jobs",
+        "body": {
+          "vle_id": "string (phone)",
+          "citizen_name": "string",
+          "citizen_phone": "string",
+          "consent_recorded": true
+        },
+        "response": { "job_id": "string" }
+      },
+      "get_log": {
+        "method": "GET",
+        "url": "/jobs/{job_id}/log",
+        "response": {
+          "job_id": "string",
+          "status": "processing | completed | failed | waiting_for_input",
+          "current_step": "string",
+          "progress_percentage": 0,
+          "steps_log": ["string"],
+          "result_data": {}
+        }
+      },
+      "human_input_answer": {
+        "method": "POST",
+        "url": "/agent/input-answer",
+        "body": {
+          "request_id": "string",
+          "answer": {}
+        },
+        "response": { "success": true }
+      }
+    },
+
+    "websocket_events": {
+      "connect_url": "ws://{host}:8000/ws/{vle_phone}",
+      "incoming_event_job_update": {
+        "type": "job_update",
+        "job_id": "string",
+        "step": "string",
+        "progress": 0,
+        "status": "processing | completed | failed"
+      },
+      "incoming_event_input_required": {
+        "type": "input_required",
+        "request_id": "string",
+        "fields_needed": ["string"],
+        "screenshot_url": "string (local file path on server)",
+        "message": "string"
+      }
+    },
+
+    "voice_service": {
+      "process_audio": {
+        "method": "POST",
+        "url": "/process-audio",
+        "service_port": 8001,
+        "body": {
+          "audio_base64": "string (base64 WAV/m4a)",
+          "vle_id": "string",
+          "language_hint": "hi | en | mr | ta | te"
+        },
+        "response": {
+          "transcript": "string",
+          "scheme": "pm_kisan | e_shram | ayushman_bharat | epfo | widow_pension | ration_card",
+          "intent": "check_status | new_registration | download_card | grievance",
+          "entities": {},
+          "language_detected": "string"
+        },
+        "error_503": "Bhashini not configured — switch to text mode"
+      },
+      "classify_text": {
+        "method": "POST",
+        "url": "/classify-text",
+        "service_port": 8001,
+        "body": {
+          "text": "string",
+          "vle_id": "string",
+          "language": "hi | en | mr | ta | te"
+        },
+        "response": {
+          "scheme": "string",
+          "intent": "string",
+          "entities": {},
+          "confidence": 0.0
+        }
+      }
+    },
+
+    "document_service": {
+      "process_document": {
+        "method": "POST",
+        "url": "/process-document",
+        "service_port": 8003,
+        "body": {
+          "image_base64": "string",
+          "document_type": "aadhaar | pan | ration_card | bank_passbook",
+          "vle_id": "string",
+          "apply_masking": true
+        },
+        "response": {
+          "extracted_data": {
+            "name": "string",
+            "dob": "string",
+            "aadhaar_last4": "string",
+            "pan_number": "string"
+          },
+          "masked_image_url": "string (S3 URL)",
+          "is_authentic": true,
+          "warnings": []
+        }
+      }
+    },
+
+    "agent_service": {
+      "execute_task": {
+        "method": "POST",
+        "url": "/execute-task",
+        "service_port": 8002,
+        "body": {
+          "task_id": "string (job_id)",
+          "scheme": "pm_kisan | e_shram | ayushman_bharat | epfo | widow_pension",
+          "action": "check_status | new_registration | download_card",
+          "form_data": {
+            "vle_phone": "string",
+            "beneficiary_name": "string",
+            "beneficiary_phone": "string",
+            "aadhaar_last4": "string"
+          }
+        },
+        "response": {
+          "status": "completed | failed | processing",
+          "result_data": {},
+          "error_message": "string"
+        }
+      }
+    }
+  },
+
+  "screens": {
+    "SplashScreen": {
+      "purpose": "App loading / branding screen",
+      "auto_navigates_to": "LanguageSelection (after 2.5s)",
+      "checks": "AsyncStorage for existing user session",
+      "if_user_logged_in": "navigate directly to Dashboard",
+      "ui_elements": [
+        "Logo",
+        "App name GramSetu",
+        "Connecting India tagline",
+        "Loading animation"
+      ]
+    },
+
+    "LanguageSelectionScreen": {
+      "purpose": "First-time language preference selection",
+      "languages": [
+        { "code": "en", "label": "English" },
+        { "code": "hi", "label": "हिन्दी" },
+        { "code": "mr", "label": "मराठी" },
+        { "code": "ta", "label": "தமிழ்" },
+        { "code": "te", "label": "తెలుగు" }
+      ],
+      "stores_to": "React Context (LanguageContext)",
+      "navigates_to": "Auth"
+    },
+
+    "AuthScreen": {
+      "purpose": "Phone number login entry",
+      "fields": ["phone number (+91XXXXXXXXXX)"],
+      "api_call": "POST /login",
+      "navigates_to": "OTP screen",
+      "also_has": "Sign Up link → SignUpScreen"
+    },
+
+    "SignUpScreen": {
+      "purpose": "New VLE registration",
+      "fields": ["Full Name", "Phone number", "Language picker"],
+      "api_call": "POST /signup",
+      "navigates_to": "OTP screen"
+    },
+
+    "OtpScreen": {
+      "purpose": "OTP verification via WhatsApp (Twilio)",
+      "fields": ["6-digit OTP input"],
+      "api_call": "POST /verify-otp",
+      "on_success": "Store user in AsyncStorage + navigate to Dashboard",
+      "storage_key": "user",
+      "storage_value": {
+        "phone": "string",
+        "name": "string",
+        "twilioNumber": "string"
+      }
+    },
+
+    "DashboardScreen": {
+      "purpose": "Main home screen for VLE",
+      "sections": [
+        {
+          "name": "Hero voice card",
+          "description": "Hold mic button to speak a scheme request in Hindi/regional language",
+          "api_call": "POST /process-audio on Voice Service :8001",
+          "fallback": "Switch to text mode if 503"
+        },
+        {
+          "name": "Stats row",
+          "items": [
+            "Completed jobs count",
+            "Pending jobs count",
+            "Earnings (INR)"
+          ],
+          "current_state": "HARDCODED — needs real API"
+        },
+        {
+          "name": "New Service Request CTA",
+          "action": "navigate to NewJobScreen"
+        },
+        {
+          "name": "Scheme quick tiles",
+          "tiles": [
+            "PM-Kisan",
+            "e-Shram",
+            "Ayushman",
+            "EPFO",
+            "Pension",
+            "Scan Aadhaar"
+          ],
+          "action": "navigate to NewJobScreen or ScannerScreen"
+        },
+        {
+          "name": "Today Queue",
+          "description": "List of today's jobs",
+          "current_state": "HARDCODED — needs real API"
+        }
+      ]
+    },
+
+    "NewJobScreen": {
+      "purpose": "Full 6-step guided wizard to submit a government scheme job",
+      "file": "screens/NewJobScreen.js",
+      "steps": [
+        {
+          "step": 1,
+          "name": "BENEFICIARY",
+          "description": "Select or create a citizen",
+          "fields": ["Full Name (required)", "Mobile Number (optional)"],
+          "api_calls": [
+            "GET /beneficiaries/{vle_phone}",
+            "POST /beneficiaries"
+          ],
+          "ui": "Show saved beneficiaries list, allow quick select or create new"
+        },
+        {
+          "step": 2,
+          "name": "VOICE",
+          "description": "Detect scheme via voice or typed text",
+          "modes": ["Hold mic button to speak", "Switch to keyboard/text mode"],
+          "api_calls": [
+            "POST /process-audio (Voice :8001)",
+            "POST /classify-text (Voice :8001)"
+          ],
+          "output": "Scheme + Intent detected, shown in a green card",
+          "supported_schemes": [
+            "pm_kisan",
+            "e_shram",
+            "ayushman_bharat",
+            "epfo",
+            "widow_pension",
+            "ration_card"
+          ]
+        },
+        {
+          "step": 3,
+          "name": "DOCUMENTS",
+          "description": "Scan Aadhaar / PAN / other docs via camera",
+          "document_types": ["aadhaar", "pan", "ration_card", "bank_passbook"],
+          "api_call": "POST /process-document (Doc :8003)",
+          "features": [
+            "AWS Textract OCR",
+            "Aadhaar first-8-digit masking (DPDP)",
+            "S3 upload of masked image"
+          ],
+          "optional": true
+        },
+        {
+          "step": 4,
+          "name": "EXECUTING",
+          "description": "AI agent navigates live government portal",
+          "api_calls": [
+            "POST /jobs (Orchestrator :8000) — create job",
+            "POST /execute-task (Agent :8002) — start agent",
+            "WS /ws/{phone} — receive live updates"
+          ],
+          "polling_fallback": "GET /jobs/{id}/log every 3 seconds",
+          "ui": [
+            "Progress bar",
+            "Animated pulsing dot",
+            "Live step log scroll view"
+          ]
+        },
+        {
+          "step": 5,
+          "name": "INPUT_NEEDED",
+          "description": "Agent paused — needs VLE to provide extra info (OTP, CAPTCHA answer etc.)",
+          "trigger": "WebSocket message type=input_required",
+          "fields": "Dynamic — whatever agent requests",
+          "api_call": "POST /agent/input-answer (Orchestrator :8000)",
+          "ui": "Shows portal screenshot + input fields"
+        },
+        {
+          "step": 6,
+          "name": "RESULT",
+          "description": "Final success/failure screen",
+          "content": [
+            "Result data from portal",
+            "Steps completed log",
+            "Process Another Beneficiary CTA"
+          ],
+          "on_success": "Green gradient header + check icon",
+          "on_failure": "Red gradient header + close icon"
+        }
+      ]
+    },
+
+    "ScannerScreen": {
+      "purpose": "Quick standalone Aadhaar scanner (accessible from scheme tiles)",
+      "permissions": ["CAMERA"],
+      "api_call": "POST http://localhost:8003/process-document",
+      "features": [
+        "Camera preview",
+        "Tap to capture",
+        "Sends base64 to Document Service",
+        "Shows OCR success alert"
+      ],
+      "note": "Uses hardcoded localhost:8003 — needs dynamic IP in new build"
+    },
+
+    "ProfileScreen": {
+      "purpose": "VLE edits their identity details",
+      "fields": [
+        { "name": "Full Legal Name", "editable": true },
+        { "name": "Date of Birth (DD/MM/YYYY)", "editable": true },
+        { "name": "CSC Gateway ID (e.g. CSC-UP-4592)", "editable": true },
+        { "name": "Registered WhatsApp Phone", "editable": false },
+        { "name": "Twilio API Sender Number", "editable": true }
+      ],
+      "api_calls": ["GET /user/{phone}", "POST /user/update"],
+      "local_storage": "Updates AsyncStorage user.twilioNumber on save"
+    },
+
+    "BeneficiariesScreen": {
+      "purpose": "Browse and manage offline citizen directory",
+      "current_state": "HARDCODED dummy data — needs RxDB offline sync",
+      "planned_features": [
+        "Offline encrypted local DB",
+        "Sync when online",
+        "Add new citizen",
+        "Search"
+      ],
+      "dummy_data": [
+        { "name": "Suresh Kumar", "aadhar": "xxxx-xxxx-8392", "sync": true },
+        { "name": "Lakshmi Devi", "aadhar": "xxxx-xxxx-1102", "sync": false },
+        { "name": "Rahul Singh", "aadhar": "xxxx-xxxx-4475", "sync": true }
+      ]
+    },
+
+    "AnalyticsScreen": {
+      "purpose": "View past job history and earnings",
+      "current_state": "HARDCODED 3 dummy transaction cards",
+      "planned_features": [
+        "Real API job history",
+        "Earnings chart",
+        "Date filter"
+      ],
+      "structure": [
+        "PM-Kisan Registration +₹50",
+        "e-Shram Card Print +₹30",
+        "Aadhaar Masking Edge API"
+      ]
+    }
+  },
+
+  "navigation": {
+    "type": "Stack Navigator (Root) + Drawer Navigator (inside Dashboard)",
+    "root_stack": [
+      "Splash",
+      "LanguageSelection",
+      "Auth",
+      "SignUp",
+      "OTP",
+      "Dashboard (→ DrawerNavigator)",
+      "Scanner",
+      "NewJob"
+    ],
+    "drawer_screens": [
+      "Home (Dashboard)",
+      "Profile",
+      "History (Analytics)",
+      "Beneficiaries"
+    ],
+    "drawer_has": "Custom drawer with logo, VLE Console label, Logout button"
+  },
+
+  "design_system": {
+    "theme": "Saffron + Forest Green (Indian government / patriotic)",
+    "colors": {
+      "primary": "#1B5E20 (dark forest green)",
+      "secondary": "#FF9800 (saffron/orange)",
+      "background": "#F5F7FA",
+      "card": "#ffffff",
+      "border": "#C8E6C9",
+      "success": "#2E7D32",
+      "error": "#C62828",
+      "warning": "#E65100",
+      "text_primary": "#1a1a1a",
+      "text_secondary": "#555555"
+    },
+    "fonts": "System default (no custom font imported currently)",
+    "components": {
+      "buttons": "LinearGradient wrapped TouchableOpacity",
+      "cards": "White card with borderRadius 16, elevation 3",
+      "inputs": "Bordered TextInput with borderRadius 12",
+      "icons": "@expo/vector-icons MaterialCommunityIcons",
+      "paper_components": "react-native-paper (Card, Button, Avatar, Appbar, TextInput)"
+    },
+    "animations": [
+      "Animated mic pulse on recording",
+      "Animated pulsing dot on executing",
+      "Splash logo fade"
+    ]
+  },
+
+  "permissions": {
+    "android": [
+      "CAMERA",
+      "RECORD_AUDIO",
+      "READ_EXTERNAL_STORAGE",
+      "WRITE_EXTERNAL_STORAGE",
+      "INTERNET"
+    ],
+    "manifest_extras": [
+      "MODIFY_AUDIO_SETTINGS",
+      "SYSTEM_ALERT_WINDOW",
+      "VIBRATE"
+    ]
+  },
+
+  "local_storage": {
+    "library": "AsyncStorage (@react-native-async-storage/async-storage)",
+    "keys": {
+      "user": {
+        "stored_as": "JSON string",
+        "fields": {
+          "phone": "string",
+          "name": "string",
+          "twilioNumber": "string"
+        }
+      }
+    }
+  },
+
+  "state_management": {
+    "approach": "Local useState hooks per screen",
+    "global": "LanguageContext (React.createContext) for language selection",
+    "no_redux": true,
+    "no_zustand": true
+  },
+
+  "audio_recording": {
+    "library": "expo-av (Audio module)",
+    "format": "HIGH_QUALITY preset (m4a on Android)",
+    "flow": [
+      "Request microphone permission",
+      "Set audio mode (allowsRecordingIOS, playsInSilentModeIOS)",
+      "Start recording on press",
+      "Stop on release",
+      "Read as base64 via expo-file-system",
+      "POST base64 to /process-audio"
+    ]
+  },
+
+  "camera": {
+    "library": "expo-camera",
+    "usage": [
+      "Aadhaar scanner in ScannerScreen",
+      "Document scan in NewJobScreen Step 3"
+    ],
+    "output": "base64 image sent to Document Service"
+  },
+
+  "schemes_supported": [
+    {
+      "id": "pm_kisan",
+      "label": "PM-Kisan",
+      "icon": "sprout",
+      "portal": "https://pmkisan.gov.in"
+    },
+    {
+      "id": "e_shram",
+      "label": "e-Shram",
+      "icon": "hammer-wrench",
+      "portal": "https://eshram.gov.in"
+    },
+    {
+      "id": "ayushman_bharat",
+      "label": "Ayushman Bharat",
+      "icon": "hospital-box",
+      "portal": "https://beneficiary.nha.gov.in"
+    },
+    {
+      "id": "epfo",
+      "label": "EPFO",
+      "icon": "shield-account",
+      "portal": "https://unifiedportal-mem.epfindia.gov.in"
+    },
+    {
+      "id": "widow_pension",
+      "label": "Widow Pension",
+      "icon": "account-heart",
+      "portal": "State-specific portal"
+    },
+    {
+      "id": "ration_card",
+      "label": "Ration Card",
+      "icon": "card-text",
+      "portal": "State-specific FPS portal"
+    }
+  ],
+
+  "intents_supported": [
+    "check_status",
+    "new_registration",
+    "download_card",
+    "grievance",
+    "update_details"
+  ],
+
+  "languages": [
+    {
+      "code": "hi",
+      "label": "Hindi",
+      "bhashini_service": "ai4bharat/conformer-hi-gpu--t4"
+    },
+    { "code": "en", "label": "English", "bhashini_service": "N/A" },
+    {
+      "code": "mr",
+      "label": "Marathi",
+      "bhashini_service": "ai4bharat/conformer-mr-gpu--t4"
+    },
+    {
+      "code": "ta",
+      "label": "Tamil",
+      "bhashini_service": "ai4bharat/conformer-ta-gpu--t4"
+    },
+    {
+      "code": "te",
+      "label": "Telugu",
+      "bhashini_service": "ai4bharat/conformer-te-gpu--t4"
+    },
+    {
+      "code": "bn",
+      "label": "Bengali",
+      "bhashini_service": "ai4bharat/conformer-bn-gpu--t4"
+    }
+  ],
+
+  "existing_mobile_app_files": {
+    "App.js": {
+      "lines": 1410,
+      "contains": [
+        "All screens except NewJobScreen",
+        "DrawerNavigator",
+        "LanguageContext",
+        "gramSetuTheme",
+        "all styles"
+      ],
+      "note": "Monolithic — should be split in new build"
+    },
+    "screens/NewJobScreen.js": {
+      "lines": 929,
+      "contains": "Full 6-step job wizard with WebSocket + polling"
+    },
+    "config.js": {
+      "contains": "IS_PRODUCTION flag, PRODUCTION_IP, API_BASE, VOICE_API, AGENT_API, DOC_API"
+    },
+    "android/": {
+      "contains": "Expo prebuild native Android project",
+      "app_id": "com.gramsetu.app",
+      "min_sdk": 23,
+      "target_sdk": 34,
+      "build_tools": "34.0.0",
+      "kotlin_version": "1.8.10"
+    }
+  },
+
+  "what_needs_to_be_built_in_new_app": {
+    "must_have": [
+      "Separate file per screen (no monolithic App.js)",
+      "Proper navigation setup (React Navigation Stack + Drawer)",
+      "Config.js with IS_PRODUCTION + EC2 IP",
+      "All auth screens (Auth, SignUp, OTP)",
+      "Dashboard with real API stats",
+      "Full NewJobScreen 6-step wizard (ported from existing)",
+      "Aadhaar Scanner with camera",
+      "Profile screen",
+      "Beneficiaries screen",
+      "Analytics screen",
+      "WebSocket live job updates",
+      "Polling fallback for job status",
+      "AudioRecorder hook (hold to speak)",
+      "Text classify fallback when audio fails"
+    ],
+    "nice_to_have": [
+      "Dark mode",
+      "Offline RxDB beneficiary sync",
+      "Notifications screen",
+      "Job detail tap view",
+      "Real earnings chart"
+    ],
+    "known_issues_to_fix": [
+      "ScannerScreen uses hardcoded localhost — fix to use config.js",
+      "Dashboard stats are hardcoded — connect to real API",
+      "BeneficiariesScreen has dummy data",
+      "AnalyticsScreen has dummy data",
+      "No error boundary / crash reporting",
+      "Many empty catch blocks"
+    ]
+  },
+
+  "tech_stack_new_app": {
+    "framework": "React Native (Expo managed or bare — TBD by user)",
+    "navigation": "@react-navigation/native + @react-navigation/stack + @react-navigation/drawer",
+    "ui_library": "react-native-paper",
+    "icons": "@expo/vector-icons (MaterialCommunityIcons)",
+    "gradients": "expo-linear-gradient",
+    "storage": "@react-native-async-storage/async-storage",
+    "audio": "expo-av",
+    "camera": "expo-camera",
+    "file_system": "expo-file-system",
+    "http": "fetch() native (no axios needed)",
+    "websocket": "native WebSocket API"
+  }
+}
