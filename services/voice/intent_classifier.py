@@ -99,13 +99,13 @@ EXAMPLES:
                     result = await self._classify_bedrock(text)
                 except Exception as e:
                     if "AccessDeniedException" in str(e) or "INVALID_PAYMENT" in str(e):
-                        logger.warning("Claude access denied (payment instrument) — trying Amazon Titan")
+                        logger.warning("Claude access denied (payment instrument) — trying Amazon Nova Fallback")
                         self.bedrock_claude = False  # Don't retry Claude
-                        result = await self._classify_titan(text)
+                        result = await self._classify_nova(text)
                     else:
                         raise
-            elif self.bedrock:  # Claude disabled, Titan still available
-                result = await self._classify_titan(text)
+            elif self.bedrock:  # Claude disabled, Nova still available
+                result = await self._classify_nova(text)
             elif self.openai_client:
                 result = await self._classify_openai(text)
             else:
@@ -201,33 +201,36 @@ EXAMPLES:
         logger.info(f"Bedrock classification: scheme={parsed.get('scheme')}, intent={parsed.get('intent')}, conf={parsed.get('confidence')}")
         return parsed
 
-    async def _classify_titan(self, text: str) -> Dict[str, Any]:
+    async def _classify_nova(self, text: str) -> Dict[str, Any]:
         """
-        Use Amazon Titan Express for classification.
+        Use Amazon Nova Micro for classification.
         AWS-native model — NO Marketplace subscription required.
         Works with just AWS credentials + credits.
-        Model: amazon.titan-text-express-v1
+        Model: amazon.nova-micro-v1:0
         """
         import asyncio
         loop = asyncio.get_event_loop()
 
         prompt = (
             f"{self.SYSTEM_PROMPT}\n\n"
-            f"User: Classify this VLE request and respond with JSON only:\n\"{text}\"\n\nAssistant:"
+            f"User: Classify this VLE request and respond with JSON only:\n\"{text}\""
         )
 
-        def _invoke_titan():
+        def _invoke_nova():
             payload = {
-                "inputText": prompt,
-                "textGenerationConfig": {
-                    "maxTokenCount": 300,
-                    "temperature": 0.0,
-                    "topP": 1,
-                    "stopSequences": []
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [{"text": prompt}]
+                    }
+                ],
+                "inferenceConfig": {
+                    "max_new_tokens": 300,
+                    "temperature": 0.0
                 }
             }
             response = self.bedrock.invoke_model(
-                modelId="amazon.titan-text-express-v1",
+                modelId="amazon.nova-micro-v1:0",
                 body=json.dumps(payload),
                 contentType="application/json",
                 accept="application/json"
@@ -235,8 +238,8 @@ EXAMPLES:
             return json.loads(response['body'].read())
 
         try:
-            result = await loop.run_in_executor(None, _invoke_titan)
-            raw = result.get("results", [{}])[0].get("outputText", "").strip()
+            result = await loop.run_in_executor(None, _invoke_nova)
+            raw = result.get("output", {}).get("message", {}).get("content", [{}])[0].get("text", "").strip()
 
             # Strip code fences
             raw = re.sub(r"^```(?:json)?\s*", "", raw)
@@ -245,14 +248,14 @@ EXAMPLES:
             # Extract JSON object from response
             match = re.search(r"\{.*\}", raw, re.DOTALL)
             if not match:
-                raise ValueError(f"No JSON found in Titan response: {raw[:100]}")
+                raise ValueError(f"No JSON found in Nova response: {raw[:100]}")
 
             parsed = json.loads(match.group())
-            logger.info(f"Titan classification: scheme={parsed.get('scheme')}, intent={parsed.get('intent')}")
+            logger.info(f"Nova classification: scheme={parsed.get('scheme')}, intent={parsed.get('intent')}")
             return parsed
 
         except Exception as e:
-            logger.warning(f"Titan classification failed: {e} — falling back to rules")
+            logger.warning(f"Nova classification failed: {e} — falling back to rules")
             return self._classify_rules(text)
 
     async def _classify_openai(self, text: str) -> Dict[str, Any]:
