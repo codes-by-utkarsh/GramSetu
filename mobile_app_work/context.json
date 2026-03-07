@@ -38,21 +38,27 @@
     "auth": {
       "signup": {
         "method": "POST",
-        "url": "/signup",
-        "body": { "phone": "string", "name": "string" },
-        "response": { "message": "string", "otp_sent": true }
+        "url": "/auth/signup",
+        "body": {
+          "phone": "string",
+          "password": "string",
+          "fullName": "string (optional)",
+          "cscId": "string (optional)"
+        },
+        "response": { "token": "string" },
+        "note": "password is REQUIRED. OTP flow has been replaced with password-based auth."
       },
       "login": {
         "method": "POST",
-        "url": "/login",
-        "body": { "phone": "string" },
-        "response": { "message": "string", "otp_sent": true }
+        "url": "/auth/login",
+        "body": { "phone": "string", "password": "string" },
+        "response": { "token": "string" },
+        "note": "Returns token directly. No OTP step."
       },
-      "verify_otp": {
-        "method": "POST",
-        "url": "/verify-otp",
-        "body": { "phone": "string", "otp": "string" },
-        "response": { "success": true, "token": "string" }
+      "check_phone": {
+        "method": "GET",
+        "url": "/auth/check/{phone}",
+        "response": { "exists": true }
       }
     },
 
@@ -284,31 +290,29 @@
     },
 
     "AuthScreen": {
-      "purpose": "Phone number login entry",
-      "fields": ["phone number (+91XXXXXXXXXX)"],
-      "api_call": "POST /login",
-      "navigates_to": "OTP screen",
+      "purpose": "Phone number + password login",
+      "fields": ["phone number (+91XXXXXXXXXX)", "password"],
+      "api_call": "POST /auth/login",
+      "on_success": "Store token in AsyncStorage, navigate to Dashboard directly (no OTP)",
       "also_has": "Sign Up link → SignUpScreen"
     },
 
     "SignUpScreen": {
       "purpose": "New VLE registration",
-      "fields": ["Full Name", "Phone number", "Language picker"],
-      "api_call": "POST /signup",
-      "navigates_to": "OTP screen"
+      "fields": [
+        "Full Name",
+        "Phone number",
+        "Password",
+        "Confirm Password",
+        "CSC ID (optional)"
+      ],
+      "api_call": "POST /auth/signup",
+      "on_success": "Store token in AsyncStorage, navigate to Dashboard directly (no OTP)"
     },
 
     "OtpScreen": {
-      "purpose": "OTP verification via WhatsApp (Twilio)",
-      "fields": ["6-digit OTP input"],
-      "api_call": "POST /verify-otp",
-      "on_success": "Store user in AsyncStorage + navigate to Dashboard",
-      "storage_key": "user",
-      "storage_value": {
-        "phone": "string",
-        "name": "string",
-        "twilioNumber": "string"
-      }
+      "purpose": "DEPRECATED — backend no longer uses OTP. Auth is now password-based.",
+      "status": "Removed from navigation flow"
     },
 
     "DashboardScreen": {
@@ -505,18 +509,17 @@
       "LanguageSelection",
       "Auth",
       "SignUp",
-      "OTP",
-      "Dashboard (→ DrawerNavigator)",
+      "Dashboard (→ BottomTabNavigator)",
       "Scanner",
       "NewJob"
     ],
-    "drawer_screens": [
+    "bottom_tabs": [
       "Home (Dashboard)",
-      "Profile",
+      "Beneficiaries",
       "History (Analytics)",
-      "Beneficiaries"
+      "Profile"
     ],
-    "drawer_has": "Custom drawer with logo, VLE Console label, Logout button"
+    "note": "Drawer navigator replaced with BottomTabNavigator. OTP screen removed from flow."
   },
 
   "design_system": {
@@ -716,7 +719,7 @@
       "Separate file per screen (no monolithic App.js)",
       "Proper navigation setup (React Navigation Stack + Drawer)",
       "Config.js with IS_PRODUCTION + EC2 IP",
-      "All auth screens (Auth, SignUp, OTP)",
+      "All auth screens (Auth, SignUp — password-based, no OTP)",
       "Dashboard with real API stats",
       "Full NewJobScreen 6-step wizard (ported from existing)",
       "Aadhaar Scanner with camera",
