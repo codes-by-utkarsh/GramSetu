@@ -131,4 +131,3 @@ GramSetu is built exactly to the specification of the **Digital Personal Data Pr
 
 ---
 
-**Built with ❤️ for Bharat's 900 million rural citizens**
