@@ -2,252 +2,132 @@
 
 > **"From Information to Agency"** - An autonomous, voice-first, multimodal agentic system for rural India's digital transformation.
 
-## 🎯 Project Vision
-
 GramSetu (Village Bridge) transforms legacy government portals from "read-only" information sources into "read-write" APIs accessible through vernacular voice commands. It empowers Village Level Entrepreneurs (VLEs) at Common Service Centres (CSCs) to process complex government applications in seconds, not minutes.
 
-## 🏗️ Architecture Overview
+---
 
-```mermaid
-graph TB
-    subgraph "Edge Layer"
-        VLE[VLE Mobile App]
-        Citizen[Citizen WhatsApp]
-    end
-    
-    subgraph "Voice Interface - Member 1"
-        ASR[Bhashini ASR]
-        NMT[Translation Engine]
-        Intent[Intent Classifier]
-    end
-    
-    subgraph "Trust Layer - Member 3"
-        Mask[Edge Aadhaar Masking]
-        OCR[AWS Textract]
-        Verify[Document Verification]
-    end
-    
-    subgraph "Orchestrator - Member 4"
-        Queue[Redis Job Queue]
-        State[State Manager]
-        WhatsApp[WhatsApp API]
-    end
-    
-    subgraph "Browser Agent - Member 2"
-        Bedrock[AWS Bedrock Agent]
-        Vision[Visual Navigator]
-        CAPTCHA[CAPTCHA Solver]
-        Session[Session Manager]
-    end
-    
-    subgraph "Government Portals"
-        PMKISAN[PM-KISAN]
-        ESHRAM[e-Shram]
-        EPFO[EPFO]
-    end
-    
-    VLE -->|Voice + Docs| ASR
-    ASR --> Intent
-    VLE -->|Scan| Mask
-    Mask --> OCR
-    Intent --> Queue
-    OCR --> Queue
-    Queue --> Bedrock
-    Bedrock --> Vision
-    Vision --> CAPTCHA
-    CAPTCHA --> Session
-    Session --> PMKISAN
-    Session --> ESHRAM
-    Session --> EPFO
-    State --> WhatsApp
-    WhatsApp --> Citizen
-```
+## 🏗️ Master Architecture Overview
 
-## 👥 Team Structure (4-Member Hackathon)
+The codebase is structured around a four-pillar, microservice-based autonomous agent architecture designed to run on **AWS Infrastructure**. All core microservices expose REST APIs via **FastAPI**, with **React** (Vite) powering the VLE-facing frontend and inter-service communication secured via defined Pydantic `shared/schemas.py`.
 
-| Member | Role | Responsibility | Tech Stack |
-|--------|------|----------------|------------|
-| **Member 1** | Voice Architect | Vernacular ASR, Dialect Mapping, Intent Extraction | Bhashini, Sarvam AI, LangChain |
-| **Member 2** | Agent Engineer | Browser Automation, Visual Navigation, CAPTCHA Solving | AWS Bedrock Agents, Playwright, Claude 3.5 |
-| **Member 3** | Trust Architect | Privacy-Preserving OCR, PII Masking, DPDP Compliance | AWS Textract, OpenCV, Presidio |
-| **Member 4** | System Orchestrator | State Management, Offline Sync, VLE UX, WhatsApp | Redis, FastAPI, React Native, SQLite |
+### The 4 Pillars (Microservices)
+
+#### 1. 🎤 Voice Interface Service (Member 1 - Port `8001`)
+- **Location**: `services/voice/`
+- **Responsibilities**: Converting vernacular voice (Hindi/Regional) into structured job requests.
+- **Key Tech**: 
+  - **AWS Transcribe**: Replaced Bhashini as the primary ASR (Automatic Speech Recognition) engine.
+  - **AWS Translate**: Converts regional transcripts to English.
+  - **Intent Classification**: Uses LLMs (`Claude Haiku`) to classify the user's intent (e.g., `CHECK_STATUS`, `APPLY_NEW`), identifying the target scheme (e.g., `pm_kisan`).
+- **Core Endpoints**:
+  - `POST /process-audio`: Takes Base64 audio, applies noise suppression, transcribes, translates, and returns a structured `VoiceOutput` including extrapolated intent, missing info, and confidence scores.
+  - `POST /classify-text`: Fallback/text-only intent classification endpoint.
+
+#### 2. 🤖 Browser Agent Service (Member 2 - Port `8002`)
+- **Location**: `services/agent/`
+- **Responsibilities**: Autonomous web navigation employing a "Visual Navigation over DOM manipulation" approach.
+- **Key Tech**:
+  - **AWS Bedrock Agents**: Core orchestrator integrating with Claude 3.5 Sonnet.
+  - **Visual Navigator (Playwright)**: Takes screenshots and feeds them to the Vision LLM to return `x`, `y` interaction coordinates. This makes the bot completely immune to HTML/DOM changes!
+  - **Captcha Solving**: Solves logic and visual CAPTCHAs.
+  - **Session Manager**: Caches browser session states to seamlessly recover from 5-minute government portal timeouts.
+- **Core Endpoints**:
+  - `POST /execute-task`: Initiates navigation routing to the specific portal driver. Triggers real-time callbacks to Orchestrator upon completion.
+
+#### 3. 🔒 Trust & Document Processing Service (Member 3 - Port `8003`)
+- **Location**: `services/document/`
+- **Responsibilities**: Privacy-preserving OCR and Document verification. Fully **DPDP Act 2023 Compliant**.
+- **Key Tech**:
+  - **Edge Aadhaar Masking**: OpenCV actively targets and blurs the first 8 digits of Aadhaar cards before processing.
+  - **AWS Textract**: The extraction engine for robust details pulling.
+  - **S3 Secure Storage**: AES256 encrypted storage with short lifecycles (ephemeral storage).
+- **Core Endpoints**:
+  - `POST /process-document`: Receives Base64 document images. Masks PII if it's an Aadhaar, runs OCR, cross-verifies data authenticity, uploads a secure version to S3, and returns extracted fields.
+
+#### 4. 🧠 System Orchestrator Service (Member 4 - Port `8000`)
+- **Location**: `services/orchestrator/`
+- **Responsibilities**: The central API Gateway, state manager, offline-sync burst handler, and the human-in-the-loop bridge.
+- **Key Tech**:
+  - **PostgreSQL / Redis**: Persistent storage and job queue management.
+  - **WebSockets**: Real-time push notifications straight to VLE devices.
+  - **Twilio (WhatsApp Business API)**: Sends automated, verified updates to citizen's WhatsApp directly regarding their application status.
+- **Core Endpoints**:
+  - **Auth**: `POST /auth/signup`, `POST /auth/login` for VLE management.
+  - **Beneficiaries**: `POST /beneficiaries`, `GET /beneficiaries/{vle_phone}`.
+  - **Jobs Queue**: `POST /jobs`, `GET /jobs/{job_id}/log` tracking execution steps.
+  - **WebSockets**: `ws://{host}/ws/{vle_phone}` for real-time progress bars.
+  - **WhatsApp Output**: Automatic `POST /internal/jobs/update-status` triggers delivery of WhatsApp PDF receipts and congratulations to citizens.
+
+#### 5. 💻 GramSetu Web/Mobile App
+- **Location**: `gramsetu_website/`, `mobile_app_work/`
+- **Responsibilities**: Displaying the human-friendly VLE dashboard.
+- **Key Tech**: React 19, Vite, Tailwind (Assumed based on CSS), Context/Hooks. Connects deeply to the Orchestrator via WebSockets.
+
+---
+
+## 🔐 Schemas & Communication Protocol (`shared/schemas.py`)
+
+Inter-service communication heavily leans on strictly typed Pydantic models to ensure resilience:
+- **`JobStatus`**: State tracker ranging from `QUEUED` ➔ `PROCESSING` ➔ `WAITING_FOR_INPUT` (human-in-the-loop) ➔ `COMPLETED`/`FAILED`.
+- **`SchemeType`**: Target schemes mapped (e.g., `PM_KISAN`, `E_SHRAM`, `EPFO`).
+- **`IntentType`**: Maps desired action (`CHECK_STATUS`, `APPLY_NEW`).
+- **`DocumentOutput`**: Secure packaging with validation warnings limit and masked S3 bucket URLs.
+
+Configuration is globally centralized in `shared/config.py`, powered by `pydantic_settings`.
+
+---
 
 ## 🚀 Quick Start
 
 ### Prerequisites
-
 - Python 3.11+
-- Node.js 18+ (for mobile app)
-- Docker & Docker Compose
-- AWS Account with Bedrock access
-- Bhashini API credentials
-- Twilio/Meta WhatsApp Business API
+- Node.js 18+
+- Active AWS Account (Bedrock access, S3, Textract, Transcribe)
+- Twilio / Meta WhatsApp API Auth Tokens
+- Redis server + PostgreSQL running on `localhost`
 
-### Installation
+### Installation & Environment
 
+1. **Clone & Install Backend Dependencies**
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd GramSetu
-
-# Set up environment variables
-cp .env.example .env
-# Edit .env with your API keys
-
-# Start infrastructure services
-docker-compose up -d
-
-# Install Python dependencies
 pip install -r requirements.txt
-
-# Install mobile app dependencies
-cd mobile-app
-npm install
 ```
 
-### Running Individual Components
+2. **Setup ENV Configuration**
+Create a `.env` file referencing `.env.example`. Make sure you insert keys for AWS (`aws_access_key_id`, `aws_secret_access_key`), OpenAI/Anthropic/Bhashini fallback, Twilio, Postgres, and Redis credentials.
 
+3. **Start Core Services Individually (Development)**
 ```bash
-# Member 1: Voice Service
+# Terminal 1 - The Orchestrator Brain
+python -m services.orchestrator.main
+
+# Terminal 2 - Voice & ASR 
 python -m services.voice.main
 
-# Member 2: Agent Service
+# Terminal 3 - Visual Browser Agent
 python -m services.agent.main
 
-# Member 3: Document Service
+# Terminal 4 - Document & Security 
 python -m services.document.main
-
-# Member 4: Orchestrator
-python -m services.orchestrator.main
 ```
 
-## 📁 Project Structure
-
-```
-GramSetu/
-├── services/
-│   ├── voice/              # Member 1: Voice Interface
-│   ├── agent/              # Member 2: Browser Agent
-│   ├── document/           # Member 3: Trust & Identity
-│   └── orchestrator/       # Member 4: System Orchestration
-├── mobile-app/             # React Native VLE App
-├── shared/                 # Shared utilities and schemas
-├── infrastructure/         # Docker, AWS configs
-├── docs/                   # Documentation
-└── tests/                  # Integration tests
+4. **Start the React VLE Dashboard**
+```bash
+cd gramsetu_website
+npm install
+npm run dev
 ```
 
-## 🔑 Key Features
+---
 
-### 1. Voice-First Interface
-- **Bhashini Integration**: Superior dialect recognition for 22+ Indian languages
-- **Noise Suppression**: RNNoise for rural CSC environments
-- **Intent Classification**: LLM-powered entity extraction
+## 🔒 Privacy & System Compliance
 
-### 2. Autonomous Browser Agent
-- **Visual Navigation**: Screenshot-based navigation immune to DOM changes
-- **CAPTCHA Solving**: Multi-modal LLM for text, logic, and math CAPTCHAs
-- **Session Recovery**: Auto-resume on timeouts with state preservation
-
-### 3. Privacy-First Document Processing
-- **Edge Masking**: On-device Aadhaar redaction (first 8 digits)
-- **DPDP Compliance**: 24-hour auto-delete, encrypted storage
-- **Consent Management**: Verbal consent recording with audit trail
-
-### 4. Resilient Orchestration
-- **Offline-First**: Local SQLite with burst sync
-- **Job Queue**: Async processing with Redis
-- **WhatsApp Notifications**: Direct citizen communication
-
-## 🎯 Hackathon Execution Plan
-
-### Sprint Schedule (24 Hours)
-
-| Time | Member 1 | Member 2 | Member 3 | Member 4 |
-|------|----------|----------|----------|----------|
-| **00:00-04:00** | Bhashini wrapper | Playwright setup | OpenCV masking | Infra setup |
-| **04:00-12:00** | Intent classifier | PM-KISAN driver | Textract integration | Mobile app UI |
-| **12:00-18:00** | Latency optimization | Session recovery | Consent manager | Job queue |
-| **18:00-22:00** | Integration testing | Integration testing | Integration testing | Integration testing |
-| **22:00-24:00** | Demo polish | Visualization | Compliance docs | Dashboard |
-
-### Demo Flow
-
-1. **VLE speaks**: "Ramesh Kumar ka PM-Kisan status check karna hai" (Check Ramesh Kumar's PM-KISAN status)
-2. **System responds**: "Aadhaar card dikhayein" (Show Aadhaar card)
-3. **VLE scans** masked Aadhaar card
-4. **Agent navigates** PM-KISAN portal autonomously
-5. **System sends** WhatsApp notification to Ramesh with status
-
-## 📊 Business Model
-
-### Unit Economics
-
-| Metric | Current (Manual) | With GramSetu |
-|--------|------------------|---------------|
-| Time per application | 20 minutes | 2 minutes |
-| VLE hourly revenue | ₹60 | ₹600 |
-| GramSetu fee | - | ₹2/transaction |
-
-### Go-to-Market
-
-1. **Phase 1**: Beta with 50 VLEs in one district
-2. **Phase 2**: CSC SPV partnership for national rollout
-3. **Phase 3**: Expand to banking, healthcare services
-
-## 🔒 Compliance & Security
-
-- **DPDP Act 2023**: Data minimization, purpose limitation, ephemeral storage
-- **Encryption**: TLS 1.3 in transit, AWS KMS at rest
-- **Audit Trail**: Timestamped consent artifacts
-- **Grievance Redressal**: WhatsApp-based complaint mechanism
-
-## 🛠️ Technology Stack
-
-### Backend
-- **Python 3.11**: Core services
-- **FastAPI**: REST APIs
-- **Redis**: Job queue and caching
-- **PostgreSQL**: Persistent storage
-
-### AI/ML
-- **AWS Bedrock**: Agent orchestration
-- **Claude 3.5 Sonnet**: Multimodal reasoning
-- **Bhashini**: Speech recognition
-- **AWS Textract**: Document OCR
-
-### Frontend
-- **React Native**: Mobile app
-- **Expo**: Development tooling
-- **RxDB**: Offline-first database
-
-### Infrastructure
-- **Docker**: Containerization
-- **AWS**: Cloud hosting
-- **GitHub Actions**: CI/CD
-
-## 📚 Documentation
-
-- [API Reference](docs/api-reference.md)
-- [Bhashini Integration Guide](docs/bhashini-integration.md)
-- [AWS Bedrock Setup](docs/bedrock-setup.md)
-- [Privacy Compliance](docs/privacy-compliance.md)
-- [Deployment Guide](docs/deployment.md)
-
-## 🤝 Contributing
-
-This is a hackathon project. For the competition period, contributions are limited to the 4-member team. Post-hackathon, we welcome community contributions.
-
-## 📄 License
-
-[To be determined post-hackathon]
-
-## 🙏 Acknowledgments
-
-- **Bhashini**: National Language Translation Mission
-- **AWS**: Bedrock Agent platform
-- **CSC SPV**: Common Service Centre network
-- **AI for Bharat**: Hackathon organizers
+GramSetu is built exactly to the specification of the **Digital Personal Data Protection (DPDP) Act 2023**:
+1. **Consent Generation**: Verbal consent recorded via Audio Hashes (`ConsentRecord`).
+2. **Data Minimization & Localization**: Edge Aadhaar truncation ensures primary Cloud providers never ingest full 12-digit blocks.
+3. **Ephemeral Storage**: Transient artifacts persist via Redis caching. Documents hit a strict 24-hour AWS S3 lifecycle deletion policy.
 
 ---
 
